@@ -26,19 +26,14 @@
   },
   "channels": {
     "telegram": {
-      "dmPolicy": "allowlist",
-      "allowFrom": []
+      "dmPolicy": "pairing"
     },
     "discord": {
-      "dmPolicy": "allowlist",
-      "allowFrom": []
+      "dmPolicy": "pairing"
     },
     "slack": {
-      "dmPolicy": "allowlist",
-      "allowFrom": []
+      "dmPolicy": "pairing"
     },
-    "whatsapp": {
-      "allowFrom": []
-    }
+    "whatsapp": {}
   }
 }
