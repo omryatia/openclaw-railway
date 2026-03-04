@@ -164,19 +164,40 @@ function patchConfig(reason) {
         config.agents.defaults.model = config.agents.defaults.model || {};
         config.agents.defaults.model.primary = config.agent.model;
       }
-      // Merge any other agent fields into agents.defaults
-      const { model: _m, ...rest } = config.agent;
-      Object.assign(config.agents.defaults, rest);
+      // Only merge workspace — other agent.* fields (thinking, etc.) are not
+      // valid under agents.defaults and OpenClaw rejects them as unknown keys
+      if (config.agent.workspace) {
+        config.agents.defaults.workspace = config.agent.workspace;
+      }
       delete config.agent;
       didMigrate = true;
       console.log(`[config] Migrated deprecated agent → agents.defaults`);
     }
 
     // Clean up unknown config keys that OpenClaw rejects
+    if (config.agents?.defaults?.thinking !== undefined) {
+      delete config.agents.defaults.thinking;
+      didMigrate = true;
+    }
     if (config.agents?.defaults?.sandbox?.tools) {
       delete config.agents.defaults.sandbox.tools;
+      didMigrate = true;
+    }
+    if (config.agents?.defaults?.sandbox?.scope) {
       delete config.agents.defaults.sandbox.scope;
       didMigrate = true;
+    }
+
+    // FIX #8: dmPolicy "allowlist" with empty allowFrom is a fatal config error.
+    // Switch to "pairing" when no IDs are configured — users can pair interactively
+    // then switch to allowlist later via /setup once they have their sender IDs.
+    for (const ch of ["telegram", "discord", "slack"]) {
+      const channel = config.channels?.[ch];
+      if (channel?.dmPolicy === "allowlist" && (!channel.allowFrom || channel.allowFrom.length === 0)) {
+        channel.dmPolicy = "pairing";
+        didMigrate = true;
+        console.log(`[config] ${ch}: switched dmPolicy from allowlist → pairing (no allowFrom IDs)`);
+      }
     }
 
     // Check if security patch is actually needed before writing
@@ -234,9 +255,9 @@ try {
     delete defaults.agent;
 
     if (TELEGRAM_BOT_TOKEN)
-      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "pairing" };
     if (DISCORD_BOT_TOKEN)
-      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "pairing" };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
     console.log("[boot] First run — wrote default config →", CONFIG_PATH);
   }
@@ -398,7 +419,7 @@ ${PUBLIC_URL ? `<div class="domain">🌐 Public URL: <a href="${PUBLIC_URL}" tar
 <ul>
   <li>✓ Gateway bound to loopback only</li>
   <li>✓ Token auth enforced</li>
-  <li>✓ DM policy: <strong>allowlist</strong></li>
+  <li>✓ DM policy: <strong>pairing</strong> (switch to allowlist after adding sender IDs)</li>
   <li>✓ Sandbox for group/channel sessions</li>
   <li>✓ Allowed origin: <strong>${PUBLIC_URL || "*"}</strong></li>
 </ul>
