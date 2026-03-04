@@ -71,42 +71,47 @@ function isFirstRun() {
   catch (e) { console.error(`[boot] Cannot create ${dir}:`, e.message); }
 });
 
-// Write default config on first run, then always patch security-critical fields
+// Write default config on first run only
+// Security-critical fields are patched AFTER gateway starts (see patchConfig())
+// because OpenClaw rewrites openclaw.json during startup, stripping custom settings
 try {
-  let config;
-
   if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
-    // First run — build from defaults
-    config = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
-    if (ANTHROPIC_API_KEY)       config.agent = { ...config.agent, model: "anthropic/claude-opus-4-6" };
-    else if (OPENROUTER_API_KEY) config.agent = { ...config.agent, model: "openrouter/auto" };
-    else if (OPENAI_API_KEY)     config.agent = { ...config.agent, model: "openai/gpt-4o" };
+    const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
+    if (ANTHROPIC_API_KEY)       defaults.agent = { ...defaults.agent, model: "anthropic/claude-opus-4-6" };
+    else if (OPENROUTER_API_KEY) defaults.agent = { ...defaults.agent, model: "openrouter/auto" };
+    else if (OPENAI_API_KEY)     defaults.agent = { ...defaults.agent, model: "openai/gpt-4o" };
     if (TELEGRAM_BOT_TOKEN)
-      config.channels.telegram = { ...config.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
     if (DISCORD_BOT_TOKEN)
-      config.channels.discord = { ...config.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
-    console.log("[boot] First run — writing default config →", CONFIG_PATH);
-  } else if (fs.existsSync(CONFIG_PATH)) {
-    // Existing config — load it
-    config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
+    console.log("[boot] First run — wrote default config →", CONFIG_PATH);
   }
+} catch (e) {
+  console.error("[boot] Failed to write default config:", e.message);
+}
 
-  if (config && GATEWAY_TOKEN.length >= 32) {
-    // Always patch these on every boot — keeps them in sync with Railway variables
+// Patch security-critical config fields after gateway has started
+// Called after pollGatewayReady() confirms the gateway is up
+// This runs AFTER OpenClaw's own startup config rewrite — so our settings stick
+function patchConfig() {
+  try {
+    if (!fs.existsSync(CONFIG_PATH)) return;
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+
     config.gateway = config.gateway || {};
     config.gateway.bind = "loopback";
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = GATEWAY_TOKEN;
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
-    // Trust Railway's reverse proxy (sends real IP via X-Forwarded-For)
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
-    console.log("[boot] Config patched — allowed origin:", config.gateway.controlUi.allowedOrigins[0]);
+    console.log("[config] Patched — origin:", config.gateway.controlUi.allowedOrigins[0]);
+  } catch (e) {
+    console.error("[config] Patch failed:", e.message);
   }
-} catch (e) {
-  console.error("[boot] Failed to write config:", e.message);
 }
 
 // ─── Gateway management ───────────────────────────────────────────────────────
@@ -159,6 +164,8 @@ function pollGatewayReady(attempts = 0) {
       gatewayReady = true;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
+      // Patch config NOW — after OpenClaw's startup rewrite has finished
+      setTimeout(patchConfig, 2000);
     }
   });
   req.on("error", () => setTimeout(() => pollGatewayReady(attempts + 1), 1000));
