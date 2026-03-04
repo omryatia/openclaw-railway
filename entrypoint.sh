@@ -1,9 +1,11 @@
 #!/bin/sh
+
 # Runs as root:
-#  1. Fix volume permissions (Railway mounts volumes as root)
-#  2. Clean stale Chrome SingletonLock files
-#  3. Start tailscaled if TAILSCALE_AUTH_KEY is set
-#  4. Drop to node user
+# 1. Fix volume permissions (Railway mounts volumes as root)
+# 2. Clean stale Chrome SingletonLock files
+# 3. Start tailscaled if TAILSCALE_AUTH_KEY is set
+# 4. Drop to node user
+
 set -e
 
 # Fix volume ownership
