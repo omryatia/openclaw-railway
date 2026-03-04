@@ -8,17 +8,12 @@ ENV PATH="/root/.bun/bin:${PATH}"
 RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /build
-
 RUN git clone --depth=1 https://github.com/openclaw/openclaw.git .
 
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 RUN pnpm ui:install
 RUN pnpm ui:build
-
-# Show built paths for debugging
-RUN echo "=== /build/dist ===" && ls /build/dist/ 2>/dev/null || echo "no dist" && \
-    echo "=== UI html files ===" && find /build -name "index.html" 2>/dev/null | head -10
 
 # ─────────────────────────────────────────────
 # Stage 2: Runtime
@@ -30,10 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /root/.bun /root/.bun
-ENV PATH="/root/.bun/bin:${PATH}"
+# Copy bun binary to a world-accessible location (not /root which is 700)
+COPY --from=builder /root/.bun/bin/bun /usr/local/bin/bun
 
-# Copy entire build output — includes UI assets bundled into dist
+# Copy built OpenClaw
 WORKDIR /app/openclaw
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/node_modules ./node_modules
@@ -57,8 +52,8 @@ ENV OPENCLAW_WORKSPACE=/data/workspace
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD bun -e "require('http').get('http://localhost:8080/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:8080/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["bun", "run", "/app/wrapper/server.js"]
