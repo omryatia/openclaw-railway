@@ -1,0 +1,10 @@
+{
+  "name": "openclaw-railway-wrapper",
+  "version": "1.0.0",
+  "description": "Secure wrapper for OpenClaw on Railway",
+  "main": "server.js",
+  "dependencies": {},
+  "engines": {
+    "node": ">=22"
+  }
+}
