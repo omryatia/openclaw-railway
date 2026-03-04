@@ -55,11 +55,8 @@ if (!SETUP_PASSWORD || SETUP_PASSWORD.length < 12) {
   process.exit(1);
 }
 
-if (!ANTHROPIC_API_KEY && !OPENROUTER_API_KEY) {
-  console.warn(
-    "[WARN] No AI provider key set (ANTHROPIC_API_KEY or OPENROUTER_API_KEY).\n" +
-    "The gateway will start but you won't be able to talk to any model."
-  );
+if (!ANTHROPIC_API_KEY && !OPENROUTER_API_KEY && !OPENAI_API_KEY) {
+  console.warn("[WARN] No AI provider key set. Gateway will start but no model will respond.");
 }
 
 // ─── Directory bootstrap ──────────────────────────────────────────────────────
@@ -81,6 +78,8 @@ if (!fs.existsSync(CONFIG_PATH)) {
   } else if (OPENROUTER_API_KEY) {
     defaults.agent = defaults.agent || {};
     defaults.agent.model = "openrouter/auto";
+  } else if (OPENAI_API_KEY) {
+  defaults.agent.model = "openai/gpt-4o";
   }
 
   if (TELEGRAM_BOT_TOKEN) {
@@ -130,6 +129,7 @@ function startGateway() {
     // Propagate model API keys
     ...(ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY }),
     ...(OPENROUTER_API_KEY && { OPENROUTER_API_KEY }),
+    ...(OPENAI_API_KEY && { OPENAI_API_KEY }),
     ...(TELEGRAM_BOT_TOKEN && { TELEGRAM_BOT_TOKEN }),
     ...(DISCORD_BOT_TOKEN && { DISCORD_BOT_TOKEN }),
   };
