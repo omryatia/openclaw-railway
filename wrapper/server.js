@@ -525,12 +525,16 @@ const server = http.createServer((req, res) => {
   req.pipe(proxyReq);
 });
 
-// WebSocket passthrough — FIX #2: strip proxy headers here too
+// WebSocket passthrough — FIX #2: strip proxy headers, FIX #9: preserve real Origin
 server.on("upgrade", (req, socket, head) => {
   if (!gatewayReady) { socket.destroy(); return; }
   const proxy = net.createConnection(GATEWAY_PORT, GATEWAY_HOST, () => {
     const headers = stripProxyHeaders(req.headers);
-    headers["origin"] = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`;
+    // FIX #9: Do NOT rewrite the Origin header.
+    // The browser sends Origin: https://<railway-domain> which matches
+    // allowedOrigins. Rewriting to http://127.0.0.1:18789 breaks the match
+    // and causes "origin not allowed" (code 4008).
+    // We only rewrite Host (for routing) and inject the auth token.
     headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
     headers["x-openclaw-token"] = GATEWAY_TOKEN;
 
