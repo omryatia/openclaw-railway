@@ -215,8 +215,17 @@ function patchConfig(reason) {
     config.gateway.bind = "loopback";
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = GATEWAY_TOKEN;
+    // Allow token auth over HTTP — the wrapper→gateway link is loopback HTTP,
+    // Railway terminates TLS at the edge (HTTPS → wrapper → HTTP → gateway)
+    config.gateway.auth.allowInsecureAuth = true;
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+    // FIX #11: Disable device identity auth for the Control UI.
+    // Behind Railway's proxy, the wrapper already handles access control
+    // (SETUP_PASSWORD). Device pairing uses WebCrypto and requires an
+    // interactive approval step that blocks the WS connection even after
+    // token auth succeeds (code 4008 "connect failed").
+    config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
     if (TAILSCALE_AUTH_KEY) {
       config.gateway.tailscale = { mode: "serve", authKey: TAILSCALE_AUTH_KEY };
@@ -478,7 +487,9 @@ const server = http.createServer((req, res) => {
           parsed.gateway.bind = "loopback";
           parsed.gateway.auth = parsed.gateway.auth || {};
           parsed.gateway.auth.token = GATEWAY_TOKEN;
+          parsed.gateway.auth.allowInsecureAuth = true;
           parsed.gateway.controlUi = parsed.gateway.controlUi || {};
+          parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           if (!parsed.gateway.controlUi.allowedOrigins) {
             parsed.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
           }
