@@ -31,21 +31,32 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy built OpenClaw
+# FIX #3: Copy the ENTIRE build output, not just dist + node_modules.
+# The old Dockerfile only copied dist/, node_modules/, and package.json.
+# OpenClaw may need additional files at runtime (UI assets, config schemas,
+# plugin manifests, etc.) that live outside dist/. The official Dockerfile
+# does `COPY --chown=node:node . .` for this reason.
 WORKDIR /app/openclaw
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/node_modules ./node_modules
 COPY --from=builder /build/package.json ./package.json
+# Copy UI build output — needed for the Control UI served by the gateway
+COPY --from=builder /build/ui ./ui
 
 # Copy wrapper and config
 COPY wrapper/server.js /app/wrapper/server.js
+COPY wrapper/package.json /app/wrapper/package.json
 COPY config/openclaw.json /app/openclaw-defaults.json
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && chown -R node:node /app
 
 ENV NODE_ENV=production
-ENV OPENCLAW_DIR=/data/.openclaw
-ENV OPENCLAW_WORKSPACE=/data/workspace
+
+# FIX #1 continued: Use the correct OpenClaw env var names.
+# OPENCLAW_STATE_DIR is what OpenClaw actually reads (not OPENCLAW_DIR).
+# OPENCLAW_WORKSPACE_DIR is the standard var (not OPENCLAW_WORKSPACE).
+ENV OPENCLAW_STATE_DIR=/data/.openclaw
+ENV OPENCLAW_WORKSPACE_DIR=/data/workspace
 
 EXPOSE 8080
 
