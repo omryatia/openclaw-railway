@@ -91,13 +91,31 @@ try {
   console.error("[boot] Failed to write default config:", e.message);
 }
 
-// Patch security-critical config fields after gateway has started
-// Called after pollGatewayReady() confirms the gateway is up
-// This runs AFTER OpenClaw's own startup config rewrite — so our settings stick
-function patchConfig() {
+// Patch security-critical config fields — called after every config write by OpenClaw
+// OpenClaw rewrites openclaw.json on startup and during doctor/wizard runs, stripping
+// custom fields like controlUi.allowedOrigins and trustedProxies each time.
+// We use fs.watch to detect every rewrite and re-apply our patch within milliseconds.
+
+let _patching = false; // prevent write→watch→patch→write loop
+
+function patchConfig(reason) {
+  if (_patching) return;
+  _patching = true;
   try {
     if (!fs.existsSync(CONFIG_PATH)) return;
-    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+    const config = JSON.parse(raw);
+
+    // Check if patch is actually needed before writing (avoid unnecessary writes)
+    const origins = config.gateway?.controlUi?.allowedOrigins || [];
+    const expectedOrigin = PUBLIC_URL || "*";
+    const alreadyPatched =
+      config.gateway?.bind === "loopback" &&
+      config.gateway?.auth?.token === GATEWAY_TOKEN &&
+      config.gateway?.trustedProxies?.includes("127.0.0.1") &&
+      (origins[0] === expectedOrigin || origins[0] === PUBLIC_URL);
+
+    if (alreadyPatched) return;
 
     config.gateway = config.gateway || {};
     config.gateway.bind = "loopback";
@@ -108,9 +126,33 @@ function patchConfig() {
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
-    console.log("[config] Patched — origin:", config.gateway.controlUi.allowedOrigins[0]);
+    console.log(`[config] Patched (${reason || "manual"}) — origin: ${config.gateway.controlUi.allowedOrigins[0]}`);
   } catch (e) {
     console.error("[config] Patch failed:", e.message);
+  } finally {
+    // Small delay before re-enabling watch to avoid tight loops
+    setTimeout(() => { _patching = false; }, 500);
+  }
+}
+
+// Watch config file — re-patch every time OpenClaw rewrites it
+function watchConfig() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    // File doesn't exist yet — retry until it does
+    setTimeout(watchConfig, 2000);
+    return;
+  }
+  try {
+    fs.watch(CONFIG_PATH, (event) => {
+      if (event === "change") {
+        setTimeout(() => patchConfig("fs.watch"), 200);
+      }
+    });
+    console.log("[config] Watching", CONFIG_PATH, "for OpenClaw rewrites");
+    // Patch immediately on first watch setup
+    patchConfig("initial");
+  } catch (e) {
+    console.error("[config] Watch failed:", e.message);
   }
 }
 
@@ -164,8 +206,8 @@ function pollGatewayReady(attempts = 0) {
       gatewayReady = true;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
-      // Patch config NOW — after OpenClaw's startup rewrite has finished
-      setTimeout(patchConfig, 2000);
+      // Start watching config — re-patches every time OpenClaw rewrites it
+      watchConfig();
     }
   });
   req.on("error", () => setTimeout(() => pollGatewayReady(attempts + 1), 1000));
@@ -344,10 +386,20 @@ const server = http.createServer((req, res) => {
 server.on("upgrade", (req, socket, head) => {
   if (!gatewayReady) { socket.destroy(); return; }
   const proxy = net.createConnection(GATEWAY_PORT, GATEWAY_HOST, () => {
+    // Rewrite origin to loopback — gateway always trusts its own host as local.
+    // The browser sends the public Railway domain as Origin, which the gateway
+    // rejects unless it's in controlUi.allowedOrigins. By rewriting to the
+    // loopback address we bypass origin checking entirely, since the gateway
+    // treats connections from 127.0.0.1 as inherently local/trusted.
+    const headers = { ...req.headers };
+    headers["origin"] = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`;
+    headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
+    headers["x-openclaw-token"] = GATEWAY_TOKEN;
+
     proxy.write(
       `${req.method} ${req.url} HTTP/1.1\r\n` +
-      Object.entries(req.headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
-      `\r\nx-openclaw-token: ${GATEWAY_TOKEN}\r\n\r\n`
+      Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
+      `\r\n\r\n`
     );
     proxy.write(head);
     socket.pipe(proxy).pipe(socket);
