@@ -415,6 +415,7 @@ ${saved ? '<p class="saved">✓ Config saved. Restart the service in Railway to 
 ${error ? `<p class="error">✗ ${error}</p>` : ""}
 <h3>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></h3>
 ${PUBLIC_URL ? `<div class="domain">🌐 Public URL: <a href="${PUBLIC_URL}" target="_blank">${PUBLIC_URL}</a></div>` : ""}
+${gatewayReady ? `<div style="margin-top:.8rem"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" style="display:inline-block;padding:.5rem 1.2rem;background:#4caf50;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:.9rem">Open Control UI ↗</a></div>` : ""}
 <h3>Security defaults</h3>
 <ul>
   <li>✓ Gateway bound to loopback only</li>
@@ -511,12 +512,35 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // FIX #10: The Control UI JS reads the gateway token from the browser URL
+  // (?token=XXX) and uses it for WebSocket authentication. If the user
+  // navigates to / or /openclaw without the token, they get "token_missing".
+  // Redirect these page loads to include the token so the JS can find it.
+  // Only redirect HTML page requests, not API/asset/WS requests.
+  const parsedUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
+  const isPageLoad = !parsedUrl.searchParams.has("token") &&
+    (req.headers.accept || "").includes("text/html");
+  const isControlUiPath = url === "/" || url === "/openclaw" || url === "/openclaw/";
+
+  if (isPageLoad && isControlUiPath && GATEWAY_TOKEN) {
+    const sep = url.includes("?") ? "&" : "?";
+    res.writeHead(302, { Location: `${url}${sep}token=${encodeURIComponent(GATEWAY_TOKEN)}` });
+    res.end();
+    return;
+  }
+
+  // Also inject token into proxied HTTP requests (for API calls, asset loads, etc.)
+  const proxyPath = url.includes("token=") ? url : (() => {
+    const s = url.includes("?") ? "&" : "?";
+    return `${url}${s}token=${encodeURIComponent(GATEWAY_TOKEN)}`;
+  })();
+
   const cleanHeaders = stripProxyHeaders(req.headers);
   cleanHeaders["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
   cleanHeaders["x-openclaw-token"] = GATEWAY_TOKEN;
 
   const proxyReq = http.request(
-    { hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: url, method: req.method, headers: cleanHeaders },
+    { hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: proxyPath, method: req.method, headers: cleanHeaders },
     proxyRes => { res.writeHead(proxyRes.statusCode, proxyRes.headers); proxyRes.pipe(res); }
   );
   proxyReq.on("error", e => {
