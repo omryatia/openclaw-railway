@@ -72,9 +72,10 @@ function isFirstRun() {
   catch (e) { console.error(`[boot] Cannot create ${dir}:`, e.message); }
 });
 
-// Write default config on first run only
-// Security-critical fields are patched AFTER gateway starts (see patchConfig())
-// because OpenClaw rewrites openclaw.json during startup, stripping custom settings
+// Boot-time config setup — runs before gateway starts
+// 1. First run: write defaults
+// 2. Every boot: patch security-critical fields into whatever config is on disk
+//    This ensures trustedProxies, allowedOrigins, token are loaded at gateway startup
 try {
   if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
     const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
@@ -88,8 +89,10 @@ try {
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
     console.log("[boot] First run — wrote default config →", CONFIG_PATH);
   }
+  // Always apply security patch before gateway starts (so it loads correctly)
+  patchConfig("pre-start");
 } catch (e) {
-  console.error("[boot] Failed to write default config:", e.message);
+  console.error("[boot] Failed to write config:", e.message);
 }
 
 // Patch security-critical config fields — called after every config write by OpenClaw
@@ -221,23 +224,8 @@ function pollGatewayReady(attempts = 0) {
       gatewayReady = true;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
-      // Start watching config — re-patches every time OpenClaw rewrites it
-      // On FIRST ready: wait for OpenClaw's startup rewrite to settle, then patch + restart
-      // On SUBSEQUENT ready (after config-patch restart): just watch
-      if (!configPatchRestartPending) {
-        setTimeout(() => {
-          const wasPatched = patchConfig("post-startup");
-          if (wasPatched) {
-            console.log("[gateway] Config patched — restarting gateway to load trustedProxies...");
-            configPatchRestartPending = true;
-            gatewayProcess.kill("SIGTERM");
-          } else {
-            watchConfig();
-          }
-        }, 3000);
-      } else {
-        watchConfig();
-      }
+      // Watch for config rewrites by OpenClaw and re-patch immediately
+      watchConfig();
     }
   });
   req.on("error", () => setTimeout(() => pollGatewayReady(attempts + 1), 1000));
