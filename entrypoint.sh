@@ -5,4 +5,4 @@ set -e
 mkdir -p /data/.openclaw /data/workspace
 chown -R node:node /data
 
-exec tini -- su-exec node "$@"
+exec tini -- gosu node "$@"
