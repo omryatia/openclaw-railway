@@ -38,6 +38,7 @@ const OPENROUTER_API_KEY  = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY      = process.env.OPENAI_API_KEY || "";
 const TELEGRAM_BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN || "";
 const DISCORD_BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN || "";
+const TAILSCALE_AUTH_KEY  = process.env.TAILSCALE_AUTH_KEY || "";
 
 // Railway provides this automatically — use it for dynamic origin allowlist
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
@@ -99,8 +100,9 @@ try {
 let _patching = false; // prevent write→watch→patch→write loop
 
 function patchConfig(reason) {
-  if (_patching) return;
+  if (_patching) return false;
   _patching = true;
+  let didPatch = false;
   try {
     if (!fs.existsSync(CONFIG_PATH)) return;
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
@@ -115,7 +117,7 @@ function patchConfig(reason) {
       config.gateway?.trustedProxies?.includes("127.0.0.1") &&
       (origins[0] === expectedOrigin || origins[0] === PUBLIC_URL);
 
-    if (alreadyPatched) return;
+    if (alreadyPatched) return false;
 
     config.gateway = config.gateway || {};
     config.gateway.bind = "loopback";
@@ -124,15 +126,20 @@ function patchConfig(reason) {
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
+    if (TAILSCALE_AUTH_KEY) {
+      config.gateway.tailscale = { mode: "serve", authKey: TAILSCALE_AUTH_KEY };
+      config.gateway.auth.allowTailscale = true;
+    }
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
     console.log(`[config] Patched (${reason || "manual"}) — origin: ${config.gateway.controlUi.allowedOrigins[0]}`);
+    didPatch = true;
   } catch (e) {
     console.error("[config] Patch failed:", e.message);
   } finally {
-    // Small delay before re-enabling watch to avoid tight loops
     setTimeout(() => { _patching = false; }, 500);
   }
+  return didPatch;
 }
 
 // Watch config file — re-patch every time OpenClaw rewrites it
@@ -161,6 +168,7 @@ function watchConfig() {
 let gatewayProcess = null;
 let gatewayReady = false;
 let restartCount = 0;
+let configPatchRestartPending = false; // tracks intentional restart after config patch
 const MAX_RESTARTS = 10;
 const RESTART_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 
@@ -192,10 +200,17 @@ function startGateway() {
   gatewayProcess.on("spawn", () => { console.log("[gateway] PID:", gatewayProcess.pid); pollGatewayReady(); });
   gatewayProcess.on("exit", (code, signal) => {
     gatewayReady = false;
-    restartCount++;
-    const delay = RESTART_DELAYS[Math.min(restartCount - 1, RESTART_DELAYS.length - 1)];
-    console.warn(`[gateway] Exited code=${code}, restarting in ${delay}ms...`);
-    setTimeout(startGateway, delay);
+    if (configPatchRestartPending) {
+      // Intentional restart after config patch — don't count as a crash
+      configPatchRestartPending = false;
+      console.log("[gateway] Config-patch restart — restarting immediately...");
+      setTimeout(startGateway, 500);
+    } else {
+      restartCount++;
+      const delay = RESTART_DELAYS[Math.min(restartCount - 1, RESTART_DELAYS.length - 1)];
+      console.warn(`[gateway] Exited code=${code}, restarting in ${delay}ms...`);
+      setTimeout(startGateway, delay);
+    }
   });
 }
 
@@ -207,7 +222,22 @@ function pollGatewayReady(attempts = 0) {
       restartCount = 0;
       console.log("[gateway] Ready ✓");
       // Start watching config — re-patches every time OpenClaw rewrites it
-      watchConfig();
+      // On FIRST ready: wait for OpenClaw's startup rewrite to settle, then patch + restart
+      // On SUBSEQUENT ready (after config-patch restart): just watch
+      if (!configPatchRestartPending) {
+        setTimeout(() => {
+          const wasPatched = patchConfig("post-startup");
+          if (wasPatched) {
+            console.log("[gateway] Config patched — restarting gateway to load trustedProxies...");
+            configPatchRestartPending = true;
+            gatewayProcess.kill("SIGTERM");
+          } else {
+            watchConfig();
+          }
+        }, 3000);
+      } else {
+        watchConfig();
+      }
     }
   });
   req.on("error", () => setTimeout(() => pollGatewayReady(attempts + 1), 1000));
