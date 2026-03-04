@@ -1,0 +1,52 @@
+{
+  "name": "OpenClaw (Secure)",
+  "description": "Self-hosted personal AI assistant via WhatsApp, Telegram, Slack, Discord and more. Hardened deployment: loopback-only gateway, required token auth, DM allowlist, sandbox for group sessions, non-root container.",
+  "tags": ["ai", "assistant", "telegram", "discord", "slack", "llm", "personal-ai"],
+  "readmeUrl": "https://github.com/omryatia/openclaw-railway/blob/main/README.md",
+  "demoUrl": "https://docs.openclaw.ai",
+  "services": [
+    {
+      "name": "openclaw",
+      "source": {
+        "repo": "https://github.com/omryatia/openclaw-railway"
+      },
+      "variables": [
+        {
+          "name": "GATEWAY_TOKEN",
+          "description": "Auth token for the OpenClaw gateway. REQUIRED. Min 32 chars. Generate with: openssl rand -hex 32",
+          "required": true
+        },
+        {
+          "name": "SETUP_PASSWORD",
+          "description": "Password for the /setup wizard. REQUIRED. Min 12 chars.",
+          "required": true
+        },
+        {
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Anthropic API key (for Claude models). Provide this OR OPENROUTER_API_KEY.",
+          "required": false
+        },
+        {
+          "name": "OPENROUTER_API_KEY",
+          "description": "OpenRouter API key (access to GPT-4o, Claude, Gemini via one key).",
+          "required": false
+        },
+        {
+          "name": "TELEGRAM_BOT_TOKEN",
+          "description": "Telegram bot token from @BotFather. Optional — enables Telegram channel.",
+          "required": false
+        },
+        {
+          "name": "DISCORD_BOT_TOKEN",
+          "description": "Discord bot token. Optional — enables Discord channel.",
+          "required": false
+        }
+      ],
+      "volumes": [
+        {
+          "mountPath": "/data"
+        }
+      ]
+    }
+  ]
+}

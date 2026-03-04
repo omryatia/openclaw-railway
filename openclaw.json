@@ -1,0 +1,47 @@
+{
+  "gateway": {
+    "bind": "loopback",
+    "port": 18789,
+    "auth": {
+      "mode": "token"
+    },
+    "tailscale": {
+      "mode": "off"
+    }
+  },
+  "agent": {
+    "model": "anthropic/claude-opus-4-6",
+    "thinking": "auto",
+    "workspace": "/data/workspace"
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/data/workspace",
+      "sandbox": {
+        "mode": "non-main",
+        "scope": "agent",
+        "tools": {
+          "allowlist": ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send"],
+          "denylist": ["browser", "canvas", "nodes", "cron"]
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "discord": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "slack": {
+      "dmPolicy": "allowlist",
+      "allowFrom": []
+    },
+    "whatsapp": {
+      "allowFrom": []
+    }
+  }
+}
