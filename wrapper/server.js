@@ -530,16 +530,18 @@ server.on("upgrade", (req, socket, head) => {
   if (!gatewayReady) { socket.destroy(); return; }
   const proxy = net.createConnection(GATEWAY_PORT, GATEWAY_HOST, () => {
     const headers = stripProxyHeaders(req.headers);
-    // FIX #9: Do NOT rewrite the Origin header.
-    // The browser sends Origin: https://<railway-domain> which matches
-    // allowedOrigins. Rewriting to http://127.0.0.1:18789 breaks the match
-    // and causes "origin not allowed" (code 4008).
-    // We only rewrite Host (for routing) and inject the auth token.
     headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
-    headers["x-openclaw-token"] = GATEWAY_TOKEN;
+
+    // FIX #10: Inject gateway token for WebSocket auth.
+    // The gateway checks WS auth via: query param ?token=, Authorization header,
+    // or Sec-WebSocket-Protocol — NOT via x-openclaw-token custom header.
+    // Append token as query parameter (most reliable for WS handshake).
+    let wsUrl = req.url || "/";
+    const separator = wsUrl.includes("?") ? "&" : "?";
+    wsUrl += `${separator}token=${encodeURIComponent(GATEWAY_TOKEN)}`;
 
     proxy.write(
-      `${req.method} ${req.url} HTTP/1.1\r\n` +
+      `${req.method} ${wsUrl} HTTP/1.1\r\n` +
       Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
       `\r\n\r\n`
     );
