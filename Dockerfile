@@ -20,10 +20,10 @@ RUN pnpm ui:build
 # ─────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
 
-# su-exec: drop privileges after fixing volume ownership at runtime
+# gosu: drop privileges after fixing volume ownership at runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
-    su-exec \
+    gosu \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
