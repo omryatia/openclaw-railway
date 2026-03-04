@@ -23,9 +23,29 @@ const net = require("net");
 const PORT = parseInt(process.env.PORT || "8080", 10);
 const GATEWAY_PORT = 18789;
 const GATEWAY_HOST = "127.0.0.1";
-const OPENCLAW_DIR = process.env.OPENCLAW_DIR || "/data/.openclaw";
-const WORKSPACE_DIR = process.env.OPENCLAW_WORKSPACE || "/data/workspace";
-const CONFIG_PATH = path.join(OPENCLAW_DIR, "openclaw.json");
+
+// FIX #1 (CRITICAL — ROOT CAUSE): Config path mismatch.
+//
+// OLD CODE:
+//   OPENCLAW_DIR = "/data/.openclaw"
+//   CONFIG_PATH  = "/data/.openclaw/openclaw.json"
+//   Gateway env:  HOME = "/data/.openclaw"   (HOME was set to OPENCLAW_DIR)
+//
+// PROBLEM: OpenClaw resolves state dir as $OPENCLAW_STATE_DIR or $HOME/.openclaw.
+// With HOME=/data/.openclaw, the gateway looked for config at:
+//   /data/.openclaw/.openclaw/openclaw.json   ← NESTED, DOESN'T EXIST
+// But the wrapper wrote config to:
+//   /data/.openclaw/openclaw.json             ← CORRECT PATH
+//
+// RESULT: Gateway started with --allow-unconfigured (empty config),
+// meaning NO trustedProxies, NO auth token, NO allowedOrigins.
+// Every WebSocket connection was rejected with code 4008 "connect failed".
+//
+// FIX: Use OPENCLAW_STATE_DIR (the standard OpenClaw env var) AND
+// set HOME=/data so $HOME/.openclaw resolves to /data/.openclaw.
+const STATE_DIR = process.env.OPENCLAW_STATE_DIR || "/data/.openclaw";
+const WORKSPACE_DIR = process.env.OPENCLAW_WORKSPACE_DIR || "/data/workspace";
+const CONFIG_PATH = path.join(STATE_DIR, "openclaw.json");
 const DEFAULTS_PATH = "/app/openclaw-defaults.json";
 const OPENCLAW_BIN = "/app/openclaw/dist/index.js";
 
@@ -43,6 +63,44 @@ const TAILSCALE_AUTH_KEY  = process.env.TAILSCALE_AUTH_KEY || "";
 // Railway provides this automatically — use it for dynamic origin allowlist
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
 const PUBLIC_URL = PUBLIC_DOMAIN ? `https://${PUBLIC_DOMAIN}` : "";
+
+// FIX #2 (CRITICAL): Strip proxy headers before forwarding to gateway.
+//
+// OLD CODE: `const headers = { ...req.headers }` — forwarded ALL headers
+// including x-forwarded-for, x-forwarded-proto, etc. from Railway's edge.
+//
+// PROBLEM: The gateway saw proxy headers but the source IP (127.0.0.1) wasn't
+// recognized as a trusted proxy (because of FIX #1 — config wasn't loaded).
+// Even WITH the config loaded, forwarding Railway's headers creates confusion
+// since the wrapper IS the trusted proxy — it should present clean requests.
+//
+// The "[ws] Proxy headers detected from untrusted address" log message was
+// the gateway complaining about these leaked headers.
+const STRIPPED_HEADERS = new Set([
+  "x-forwarded-for",
+  "x-forwarded-proto",
+  "x-forwarded-host",
+  "x-forwarded-port",
+  "x-forwarded-scheme",
+  "x-real-ip",
+  "x-envoy-external-address",
+  "forwarded",
+  "cf-connecting-ip",
+  "cf-ipcountry",
+  "cf-ray",
+  "cf-visitor",
+  "true-client-ip",
+]);
+
+function stripProxyHeaders(original) {
+  const clean = {};
+  for (const [key, value] of Object.entries(original)) {
+    if (!STRIPPED_HEADERS.has(key.toLowerCase())) {
+      clean[key] = value;
+    }
+  }
+  return clean;
+}
 
 // ─── Validation ───────────────────────────────────────────────────────────────
 
@@ -67,7 +125,7 @@ function isFirstRun() {
 
 // ─── Directory bootstrap ──────────────────────────────────────────────────────
 
-[OPENCLAW_DIR, WORKSPACE_DIR].forEach(dir => {
+[STATE_DIR, WORKSPACE_DIR].forEach(dir => {
   try { fs.mkdirSync(dir, { recursive: true }); }
   catch (e) { console.error(`[boot] Cannot create ${dir}:`, e.message); }
 });
@@ -148,7 +206,6 @@ function patchConfig(reason) {
 // Watch config file — re-patch every time OpenClaw rewrites it
 function watchConfig() {
   if (!fs.existsSync(CONFIG_PATH)) {
-    // File doesn't exist yet — retry until it does
     setTimeout(watchConfig, 2000);
     return;
   }
@@ -159,7 +216,6 @@ function watchConfig() {
       }
     });
     console.log("[config] Watching", CONFIG_PATH, "for OpenClaw rewrites");
-    // Patch immediately on first watch setup
     patchConfig("initial");
   } catch (e) {
     console.error("[config] Watch failed:", e.message);
@@ -171,7 +227,7 @@ function watchConfig() {
 let gatewayProcess = null;
 let gatewayReady = false;
 let restartCount = 0;
-let configPatchRestartPending = false; // tracks intentional restart after config patch
+let configPatchRestartPending = false;
 const MAX_RESTARTS = 10;
 const RESTART_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 
@@ -182,18 +238,23 @@ function startGateway() {
   console.log(`[gateway] Starting (attempt ${restartCount + 1})...`);
   gatewayReady = false;
 
+  // FIX #1 continued: correct env vars for the gateway subprocess.
+  // HOME=/data → gateway resolves $HOME/.openclaw = /data/.openclaw ✓
+  // OPENCLAW_STATE_DIR is the explicit override (belt + suspenders)
+  // OPENCLAW_WORKSPACE_DIR (not OPENCLAW_WORKSPACE) is the standard var
   const env = {
     ...process.env,
-    HOME: OPENCLAW_DIR,
-    OPENCLAW_DIR,
+    HOME: "/data",
+    OPENCLAW_STATE_DIR: STATE_DIR,
+    OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
     OPENCLAW_GATEWAY_BIND: "loopback",
     OPENCLAW_GATEWAY_PORT: String(GATEWAY_PORT),
     OPENCLAW_GATEWAY_TOKEN: GATEWAY_TOKEN,
-    ...(ANTHROPIC_API_KEY  && { ANTHROPIC_API_KEY }),
+    ...(ANTHROPIC_API_KEY && { ANTHROPIC_API_KEY }),
     ...(OPENROUTER_API_KEY && { OPENROUTER_API_KEY }),
-    ...(OPENAI_API_KEY     && { OPENAI_API_KEY }),
+    ...(OPENAI_API_KEY && { OPENAI_API_KEY }),
     ...(TELEGRAM_BOT_TOKEN && { TELEGRAM_BOT_TOKEN }),
-    ...(DISCORD_BOT_TOKEN  && { DISCORD_BOT_TOKEN }),
+    ...(DISCORD_BOT_TOKEN && { DISCORD_BOT_TOKEN }),
   };
 
   gatewayProcess = spawn("node", [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT), "--allow-unconfigured"], {
@@ -204,7 +265,6 @@ function startGateway() {
   gatewayProcess.on("exit", (code, signal) => {
     gatewayReady = false;
     if (configPatchRestartPending) {
-      // Intentional restart after config patch — don't count as a crash
       configPatchRestartPending = false;
       console.log("[gateway] Config-patch restart — restarting immediately...");
       setTimeout(startGateway, 500);
@@ -224,7 +284,6 @@ function pollGatewayReady(attempts = 0) {
       gatewayReady = true;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
-      // Watch for config rewrites by OpenClaw and re-patch immediately
       watchConfig();
     }
   });
@@ -354,7 +413,6 @@ const server = http.createServer((req, res) => {
           parsed.gateway.bind = "loopback";
           parsed.gateway.auth = parsed.gateway.auth || {};
           parsed.gateway.auth.token = GATEWAY_TOKEN;
-          // Keep the dynamic origin
           parsed.gateway.controlUi = parsed.gateway.controlUi || {};
           if (!parsed.gateway.controlUi.allowedOrigins) {
             parsed.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
@@ -382,16 +440,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Proxy to gateway
+  // Proxy to gateway — FIX #2: strip proxy headers
   if (!gatewayReady) {
     res.writeHead(503, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Gateway starting, please wait..." }));
     return;
   }
 
+  const cleanHeaders = stripProxyHeaders(req.headers);
+  cleanHeaders["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
+  cleanHeaders["x-openclaw-token"] = GATEWAY_TOKEN;
+
   const proxyReq = http.request(
-    { hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: url, method: req.method,
-      headers: { ...req.headers, host: `${GATEWAY_HOST}:${GATEWAY_PORT}`, "x-openclaw-token": GATEWAY_TOKEN } },
+    { hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: url, method: req.method, headers: cleanHeaders },
     proxyRes => { res.writeHead(proxyRes.statusCode, proxyRes.headers); proxyRes.pipe(res); }
   );
   proxyReq.on("error", e => {
@@ -400,16 +461,11 @@ const server = http.createServer((req, res) => {
   req.pipe(proxyReq);
 });
 
-// WebSocket passthrough
+// WebSocket passthrough — FIX #2: strip proxy headers here too
 server.on("upgrade", (req, socket, head) => {
   if (!gatewayReady) { socket.destroy(); return; }
   const proxy = net.createConnection(GATEWAY_PORT, GATEWAY_HOST, () => {
-    // Rewrite origin to loopback — gateway always trusts its own host as local.
-    // The browser sends the public Railway domain as Origin, which the gateway
-    // rejects unless it's in controlUi.allowedOrigins. By rewriting to the
-    // loopback address we bypass origin checking entirely, since the gateway
-    // treats connections from 127.0.0.1 as inherently local/trusted.
-    const headers = { ...req.headers };
+    const headers = stripProxyHeaders(req.headers);
     headers["origin"] = `http://${GATEWAY_HOST}:${GATEWAY_PORT}`;
     headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
     headers["x-openclaw-token"] = GATEWAY_TOKEN;
@@ -431,6 +487,8 @@ server.on("upgrade", (req, socket, head) => {
 server.listen(PORT, () => {
   console.log(`[wrapper] Listening on :${PORT}`);
   console.log(`[wrapper] Public URL: ${PUBLIC_URL || "(not set)"}`);
+  console.log(`[wrapper] State dir: ${STATE_DIR}`);
+  console.log(`[wrapper] Config: ${CONFIG_PATH}`);
   console.log(`[wrapper] First run: ${isFirstRun()}`);
   if (configErrors.length > 0) {
     console.warn("[wrapper] Serving config-error page until variables are set.");
