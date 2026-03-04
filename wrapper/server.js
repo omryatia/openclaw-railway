@@ -99,6 +99,8 @@ try {
     config.gateway.auth.token = GATEWAY_TOKEN;
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+    // Trust Railway's reverse proxy (sends real IP via X-Forwarded-For)
+    config.gateway.trustedProxies = ["127.0.0.1", "::1"];
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
     console.log("[boot] Config patched — allowed origin:", config.gateway.controlUi.allowedOrigins[0]);
