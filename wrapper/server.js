@@ -130,33 +130,16 @@ function isFirstRun() {
   catch (e) { console.error(`[boot] Cannot create ${dir}:`, e.message); }
 });
 
-// Boot-time config setup — runs before gateway starts
-// 1. First run: write defaults
-// 2. Every boot: patch security-critical fields into whatever config is on disk
-//    This ensures trustedProxies, allowedOrigins, token are loaded at gateway startup
-try {
-  if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
-    const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
-    if (ANTHROPIC_API_KEY)       defaults.agent = { ...defaults.agent, model: "anthropic/claude-opus-4-6" };
-    else if (OPENROUTER_API_KEY) defaults.agent = { ...defaults.agent, model: "openrouter/auto" };
-    else if (OPENAI_API_KEY)     defaults.agent = { ...defaults.agent, model: "openai/gpt-4o" };
-    if (TELEGRAM_BOT_TOKEN)
-      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
-    if (DISCORD_BOT_TOKEN)
-      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
-    console.log("[boot] First run — wrote default config →", CONFIG_PATH);
-  }
-  // Always apply security patch before gateway starts (so it loads correctly)
-  patchConfig("pre-start");
-} catch (e) {
-  console.error("[boot] Failed to write config:", e.message);
-}
-
-// Patch security-critical config fields — called after every config write by OpenClaw
+// ─── Config patching ──────────────────────────────────────────────────────────
+// Patch security-critical config fields — called after every config write by OpenClaw.
 // OpenClaw rewrites openclaw.json on startup and during doctor/wizard runs, stripping
 // custom fields like controlUi.allowedOrigins and trustedProxies each time.
 // We use fs.watch to detect every rewrite and re-apply our patch within milliseconds.
+//
+// FIX #5: _patching and patchConfig MUST be declared BEFORE the boot-time code
+// that calls patchConfig("pre-start"). `let` has a temporal dead zone — accessing
+// it before the declaration line throws "Cannot access '_patching' before initialization".
+// The old code had the boot block at ~line 137 and `let _patching` at ~line 161.
 
 let _patching = false; // prevent write→watch→patch→write loop
 
@@ -169,7 +152,34 @@ function patchConfig(reason) {
     const raw = fs.readFileSync(CONFIG_PATH, "utf8");
     const config = JSON.parse(raw);
 
-    // Check if patch is actually needed before writing (avoid unnecessary writes)
+    // FIX #6: Migrate deprecated `agent` → `agents.defaults` format.
+    // Current OpenClaw versions reject the old `agent.model` string format.
+    // Gateway exits with code=1: "agent.model string was replaced by
+    // agents.defaults.model.primary/fallbacks".
+    let didMigrate = false;
+    if (config.agent) {
+      config.agents = config.agents || {};
+      config.agents.defaults = config.agents.defaults || {};
+      if (config.agent.model && typeof config.agent.model === "string") {
+        config.agents.defaults.model = config.agents.defaults.model || {};
+        config.agents.defaults.model.primary = config.agent.model;
+      }
+      // Merge any other agent fields into agents.defaults
+      const { model: _m, ...rest } = config.agent;
+      Object.assign(config.agents.defaults, rest);
+      delete config.agent;
+      didMigrate = true;
+      console.log(`[config] Migrated deprecated agent → agents.defaults`);
+    }
+
+    // Clean up unknown config keys that OpenClaw rejects
+    if (config.agents?.defaults?.sandbox?.tools) {
+      delete config.agents.defaults.sandbox.tools;
+      delete config.agents.defaults.sandbox.scope;
+      didMigrate = true;
+    }
+
+    // Check if security patch is actually needed before writing
     const origins = config.gateway?.controlUi?.allowedOrigins || [];
     const expectedOrigin = PUBLIC_URL || "*";
     const alreadyPatched =
@@ -178,7 +188,7 @@ function patchConfig(reason) {
       config.gateway?.trustedProxies?.includes("127.0.0.1") &&
       (origins[0] === expectedOrigin || origins[0] === PUBLIC_URL);
 
-    if (alreadyPatched) return false;
+    if (alreadyPatched && !didMigrate) return false;
 
     config.gateway = config.gateway || {};
     config.gateway.bind = "loopback";
@@ -201,6 +211,39 @@ function patchConfig(reason) {
     setTimeout(() => { _patching = false; }, 500);
   }
   return didPatch;
+}
+
+// ─── Boot-time config ─────────────────────────────────────────────────────────
+// 1. First run: write defaults using the NEW config schema
+// 2. Every boot: patch security-critical fields + migrate legacy keys
+try {
+  if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
+    const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
+
+    // FIX #6 continued: Write config using the new agents.defaults.model.primary
+    // format from the start, NOT the deprecated `agent.model` string.
+    defaults.agents = defaults.agents || {};
+    defaults.agents.defaults = defaults.agents.defaults || {};
+    defaults.agents.defaults.model = defaults.agents.defaults.model || {};
+
+    if (ANTHROPIC_API_KEY)       defaults.agents.defaults.model.primary = "anthropic/claude-opus-4-6";
+    else if (OPENROUTER_API_KEY) defaults.agents.defaults.model.primary = "openrouter/auto";
+    else if (OPENAI_API_KEY)     defaults.agents.defaults.model.primary = "openai/gpt-4o";
+
+    // Remove any leftover deprecated `agent` key from the defaults template
+    delete defaults.agent;
+
+    if (TELEGRAM_BOT_TOKEN)
+      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+    if (DISCORD_BOT_TOKEN)
+      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
+    console.log("[boot] First run — wrote default config →", CONFIG_PATH);
+  }
+  // Always apply security patch + migration before gateway starts
+  patchConfig("pre-start");
+} catch (e) {
+  console.error("[boot] Failed to write config:", e.message);
 }
 
 // Watch config file — re-patch every time OpenClaw rewrites it
