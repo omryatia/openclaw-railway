@@ -13,21 +13,14 @@
     },
     "trustedProxies": ["127.0.0.1/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
   },
-  "agent": {
-    "model": "anthropic/claude-opus-4-6",
-    "thinking": "auto",
-    "workspace": "/data/workspace"
-  },
   "agents": {
     "defaults": {
+      "model": {
+        "primary": "anthropic/claude-opus-4-6"
+      },
       "workspace": "/data/workspace",
       "sandbox": {
-        "mode": "non-main",
-        "scope": "agent",
-        "tools": {
-          "allowlist": ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send"],
-          "denylist": ["browser", "canvas", "nodes", "cron"]
-        }
+        "mode": "non-main"
       }
     }
   },
