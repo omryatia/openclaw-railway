@@ -71,35 +71,40 @@ function isFirstRun() {
   catch (e) { console.error(`[boot] Cannot create ${dir}:`, e.message); }
 });
 
-// Write secure default config on first run
-if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
-  try {
-    const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
+// Write default config on first run, then always patch security-critical fields
+try {
+  let config;
 
-    defaults.gateway.auth.token = GATEWAY_TOKEN;
-
-    // Dynamically set allowed origins from Railway's public domain
-    if (PUBLIC_URL) {
-      defaults.gateway.controlUi = { allowedOrigins: [PUBLIC_URL] };
-    } else {
-      defaults.gateway.controlUi = { allowedOrigins: ["*"] };
-    }
-
-    if (ANTHROPIC_API_KEY)       defaults.agent = { ...defaults.agent, model: "anthropic/claude-opus-4-6" };
-    else if (OPENROUTER_API_KEY) defaults.agent = { ...defaults.agent, model: "openrouter/auto" };
-    else if (OPENAI_API_KEY)     defaults.agent = { ...defaults.agent, model: "openai/gpt-4o" };
-
+  if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
+    // First run — build from defaults
+    config = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
+    if (ANTHROPIC_API_KEY)       config.agent = { ...config.agent, model: "anthropic/claude-opus-4-6" };
+    else if (OPENROUTER_API_KEY) config.agent = { ...config.agent, model: "openrouter/auto" };
+    else if (OPENAI_API_KEY)     config.agent = { ...config.agent, model: "openai/gpt-4o" };
     if (TELEGRAM_BOT_TOKEN)
-      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+      config.channels.telegram = { ...config.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
     if (DISCORD_BOT_TOKEN)
-      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
-
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
-    console.log("[boot] Wrote default config →", CONFIG_PATH);
-    if (PUBLIC_URL) console.log("[boot] Allowed origin:", PUBLIC_URL);
-  } catch (e) {
-    console.error("[boot] Failed to write default config:", e.message);
+      config.channels.discord = { ...config.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "allowlist", allowFrom: [] };
+    console.log("[boot] First run — writing default config →", CONFIG_PATH);
+  } else if (fs.existsSync(CONFIG_PATH)) {
+    // Existing config — load it
+    config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
   }
+
+  if (config && GATEWAY_TOKEN.length >= 32) {
+    // Always patch these on every boot — keeps them in sync with Railway variables
+    config.gateway = config.gateway || {};
+    config.gateway.bind = "loopback";
+    config.gateway.auth = config.gateway.auth || {};
+    config.gateway.auth.token = GATEWAY_TOKEN;
+    config.gateway.controlUi = config.gateway.controlUi || {};
+    config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+    console.log("[boot] Config patched — allowed origin:", config.gateway.controlUi.allowedOrigins[0]);
+  }
+} catch (e) {
+  console.error("[boot] Failed to write config:", e.message);
 }
 
 // ─── Gateway management ───────────────────────────────────────────────────────
