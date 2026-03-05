@@ -58,7 +58,6 @@ const OPENROUTER_API_KEY  = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY      = process.env.OPENAI_API_KEY || "";
 const TELEGRAM_BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN || "";
 const DISCORD_BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN || "";
-const TAILSCALE_AUTH_KEY  = process.env.TAILSCALE_AUTH_KEY || "";
 
 // Railway provides this automatically — use it for dynamic origin allowlist
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
@@ -221,8 +220,8 @@ function patchConfig(reason) {
       console.log("[config] Set default tool policy (exec disabled, safe tools only)");
     }
 
-    // Clean stale tailscale config — Tailscale is handled by entrypoint.sh,
-    // not OpenClaw config. These keys cause "Unrecognized key" fatal errors.
+    // Clean stale tailscale config from previous versions that incorrectly
+    // wrote gateway.tailscale.* keys. These are not valid OpenClaw config keys.
     if (config.gateway?.tailscale) {
       delete config.gateway.tailscale;
       didMigrate = true;
@@ -499,7 +498,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <span>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></span>
     ${activeProvider ? `<span>Provider: <span class="badge ok">${activeProvider.name}</span></span>` : '<span>Provider: <span class="badge err-badge">Not configured</span></span>'}
     ${currentModel ? `<span>Model: <span class="badge ok">${currentModel}</span></span>` : ""}
-    <span>Network: <span class="badge ${TAILSCALE_AUTH_KEY ? "ok" : "warn"}">${TAILSCALE_AUTH_KEY ? "🔒 Tailscale" : "⚠ Public"}</span></span>
+    <span>Network: <span class="badge warn">Public (see Step 5 for private access)</span></span>
   </div>
   ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
   ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
@@ -711,68 +710,76 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   </details>
 </div>
 
-<!-- Step 5: Tailscale (Security) -->
+<!-- Step 5: Private Access with Tailscale -->
 <div class="card">
-  <h2><span class="step-num ${TAILSCALE_AUTH_KEY ? "step-done" : ""}">5</span> Private Network with Tailscale (recommended)</h2>
+  <h2><span class="step-num">5</span> Private Network with Tailscale (recommended)</h2>
   <p style="color:#aaa;font-size:.9rem">
-    Tailscale takes your OpenClaw <strong>off the public internet</strong>. Only devices on your private tailnet can reach it.
+    Take OpenClaw <strong>off the public internet</strong>. Only devices on your private Tailscale network (tailnet) can reach it.
   </p>
 
-  ${TAILSCALE_AUTH_KEY ? `
-  <div style="padding:.8rem 1rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;margin-top:.8rem">
-    <p class="saved" style="margin:0">✓ Tailscale auth key configured.</p>
-    <p style="color:#aaa;font-size:.85rem;margin:.5rem 0 0">
-      Access via: <code>https://openclaw-railway.&lt;your-tailnet&gt;.ts.net</code><br>
-      Find your tailnet name at <a href="https://login.tailscale.com/admin/dns" target="_blank" style="color:#ff6b35">Tailscale Admin → DNS</a><br>
-      <strong>Important:</strong> Your browser device must also be on the same tailnet (Tailscale installed & connected).
-    </p>
-    <details style="margin-top:.6rem">
-      <summary style="color:#aaa;cursor:pointer;font-size:.85rem">Not working? Troubleshoot</summary>
-      <div class="guide" style="background:#0f1f0f">
-        <ol style="font-size:.83rem">
-          <li>Check <a href="https://login.tailscale.com/admin/machines" target="_blank" style="color:#ff6b35">Tailscale Admin → Machines</a> — is <code>openclaw-railway</code> listed and online?</li>
-          <li>Is Tailscale running on the device you're browsing from?</li>
-          <li>Is <a href="https://login.tailscale.com/admin/dns" target="_blank" style="color:#ff6b35">MagicDNS</a> enabled in your tailnet?</li>
-          <li>Try the IP directly: check deploy logs for <code>[entrypoint] Tailscale up — IP: 100.x.x.x</code></li>
-          <li>After disabling Railway public networking, the container needs to be able to serve via Tailscale — check deploy logs for <code>tailscale serve</code> output</li>
-        </ol>
-      </div>
-    </details>
-  </div>
-  ` : `
   <div style="margin-top:.8rem;padding:.8rem 1rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
     <p style="color:#ff9800;margin:0 0 .3rem;font-size:.9rem">⚠ Currently your OpenClaw is on the public internet</p>
     <p style="color:#888;font-size:.85rem;margin:0">
-      Anyone who finds the URL can attempt to connect. Tailscale adds a zero-trust network layer.
+      The URL is obscure and auth-gated, but anyone who finds it can attempt to connect.
     </p>
   </div>
 
   <details style="margin-top:.8rem">
     <summary class="channel-summary">
       <span class="ch-missing">○</span>
-      <span class="env-var">Setup Tailscale</span>
-      <span class="badge warn">~3 minutes</span>
+      <span class="env-var">Setup Private Access via Tailscale Subnet Router</span>
+      <span class="badge warn">~5 minutes</span>
     </summary>
     <div class="guide">
+      <p style="color:#aaa;font-size:.85rem;margin:.5rem 0">
+        Railway uses a <strong>Subnet Router</strong> — a separate Tailscale service in your project that bridges your tailnet to Railway's private network. OpenClaw itself doesn't need Tailscale installed.
+      </p>
+
+      <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step A: Tailscale Account & App</p>
       <ol>
         <li>Sign up at <a href="https://login.tailscale.com/start" target="_blank" style="color:#ff6b35">tailscale.com</a> (free for personal use)</li>
-        <li>Install Tailscale on your devices (laptop, phone) — these are the only devices that will be able to reach OpenClaw</li>
-        <li>Go to <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" style="color:#ff6b35">Tailscale Admin → Settings → Keys</a></li>
-        <li>Click <strong>Generate auth key</strong>:
-          <ul style="margin:.3rem 0;padding-left:1rem">
-            <li>☑ Reusable (so it survives redeploys)</li>
-            <li>☑ Ephemeral (node auto-removes when container stops)</li>
-          </ul>
-        </li>
-        <li>Copy the key (starts with <code>tskey-auth-...</code>)</li>
-        <li>In Railway → Variables, add:<br>
-          <span class="env-var" style="margin-top:.3rem;display:inline-block">TAILSCALE_AUTH_KEY</span> = <em style="color:#888">tskey-auth-...</em></li>
-        <li>Railway will redeploy. Your instance joins your tailnet as <code>openclaw-railway</code></li>
-        <li><strong>Optional but recommended:</strong> After verifying Tailscale works, go to Railway → Settings → Networking and <strong>disable Public Networking</strong>. This makes your instance completely private — only reachable via Tailscale.</li>
+        <li>Install Tailscale on the devices you'll access OpenClaw from (laptop, phone, etc.)</li>
       </ol>
-      <a href="/setup" class="btn btn-primary" style="margin-top:.8rem">🔄 I added the key — check again</a>
+
+      <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step B: Generate an Auth Key</p>
+      <ol>
+        <li>Go to <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" style="color:#ff6b35">Tailscale Admin → Settings → Keys</a></li>
+        <li>Click <strong>Generate auth key</strong> (leave defaults) → copy the key</li>
+      </ol>
+
+      <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step C: Configure Split DNS</p>
+      <ol>
+        <li>Go to <a href="https://login.tailscale.com/admin/dns" target="_blank" style="color:#ff6b35">Tailscale Admin → DNS</a></li>
+        <li>Under <strong>Nameservers</strong>, click <strong>Add Nameserver → Custom</strong></li>
+        <li>Enter <code>fd12::10</code> as the nameserver</li>
+        <li>Enable <strong>Restrict to domain</strong> and enter <code>railway.internal</code></li>
+        <li>Click <strong>Save</strong></li>
+      </ol>
+
+      <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step D: Deploy the Subnet Router</p>
+      <ol>
+        <li>In your Railway project, click <strong>Create → Template</strong></li>
+        <li>Search for <strong>Tailscale Subnet Router</strong> (by Railway Templates)</li>
+        <li>Paste your auth key and deploy</li>
+        <li>In <a href="https://login.tailscale.com/admin/machines" target="_blank" style="color:#ff6b35">Tailscale Machines</a>, find the new machine → <strong>Edit route settings</strong> → accept the <code>fd12::/16</code> subnet</li>
+      </ol>
+
+      <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step E: Access OpenClaw Privately</p>
+      <ol>
+        <li>Make sure your OpenClaw service listens on all interfaces — it already does via Railway's <code>PORT</code></li>
+        <li>From a device on your tailnet, access OpenClaw via its private domain:<br>
+          <code style="display:inline-block;margin-top:.3rem">http://openclaw.railway.internal:${PORT}/setup</code></li>
+        <li><strong>Optional:</strong> Disable <strong>Public Networking</strong> in Railway → your OpenClaw service → Settings.<br>
+          This makes OpenClaw <strong>completely invisible</strong> on the internet — only reachable through your tailnet.</li>
+      </ol>
+
+      <div style="margin-top:.8rem;padding:.6rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px">
+        <p style="color:#4caf50;font-size:.85rem;margin:0">
+          📖 Full guide: <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Railway Docs — Set up a Tailscale Subnet Router</a>
+        </p>
+      </div>
     </div>
-  </details>`}
+  </details>
 </div>
 
 <!-- Security Overview -->
@@ -814,9 +821,9 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
         ? `Tool allowlist active — ${config.tools.allow.length} tools enabled (see Step 3)` 
         : "No tool policy — all tools enabled by default (configure in Step 3)"}</span>
     </li>
-    <li class="${TAILSCALE_AUTH_KEY ? "env-ok" : "env-missing"}">
-      <span>${TAILSCALE_AUTH_KEY ? "✓" : "✗"}</span>
-      <span>${TAILSCALE_AUTH_KEY ? "Tailscale — private network, off public internet" : "No Tailscale — instance is on the <strong>public internet</strong> (see Step 5)"}</span>
+    <li class="env-missing">
+      <span>⚠</span>
+      <span>Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> to go private (see Step 5)</span>
     </li>
     <li class="env-missing">
       <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
