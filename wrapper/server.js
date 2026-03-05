@@ -474,6 +474,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <span>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></span>
     ${activeProvider ? `<span>Provider: <span class="badge ok">${activeProvider.name}</span></span>` : '<span>Provider: <span class="badge err-badge">Not configured</span></span>'}
     ${currentModel ? `<span>Model: <span class="badge ok">${currentModel}</span></span>` : ""}
+    <span>Network: <span class="badge ${TAILSCALE_AUTH_KEY ? "ok" : "warn"}">${TAILSCALE_AUTH_KEY ? "🔒 Tailscale" : "⚠ Public"}</span></span>
   </div>
   ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
   ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
@@ -630,6 +631,92 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
       <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 Check again</a>
     </div>
   </details>
+</div>
+
+<!-- Step 4: Tailscale (Security) -->
+<div class="card">
+  <h2><span class="step-num ${TAILSCALE_AUTH_KEY ? "step-done" : ""}">4</span> Private Network with Tailscale (recommended)</h2>
+  <p style="color:#aaa;font-size:.9rem">
+    Tailscale takes your OpenClaw <strong>off the public internet</strong>. Only devices on your private tailnet can reach it.
+  </p>
+
+  ${TAILSCALE_AUTH_KEY ? `
+  <div style="padding:.8rem 1rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;margin-top:.8rem">
+    <p class="saved" style="margin:0">✓ Tailscale configured. Your instance is accessible via your tailnet.</p>
+    <p style="color:#aaa;font-size:.85rem;margin:.5rem 0 0">
+      Access via: <code>https://openclaw-railway.your-tailnet.ts.net</code><br>
+      You can now disable public networking in Railway to make this fully private.
+    </p>
+  </div>
+  ` : `
+  <div style="margin-top:.8rem;padding:.8rem 1rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
+    <p style="color:#ff9800;margin:0 0 .3rem;font-size:.9rem">⚠ Currently your OpenClaw is on the public internet</p>
+    <p style="color:#888;font-size:.85rem;margin:0">
+      Anyone who finds the URL can attempt to connect. Tailscale adds a zero-trust network layer.
+    </p>
+  </div>
+
+  <details style="margin-top:.8rem">
+    <summary class="channel-summary">
+      <span class="ch-missing">○</span>
+      <span class="env-var">Setup Tailscale</span>
+      <span class="badge warn">~3 minutes</span>
+    </summary>
+    <div class="guide">
+      <ol>
+        <li>Sign up at <a href="https://login.tailscale.com/start" target="_blank" style="color:#ff6b35">tailscale.com</a> (free for personal use)</li>
+        <li>Install Tailscale on your devices (laptop, phone) — these are the only devices that will be able to reach OpenClaw</li>
+        <li>Go to <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" style="color:#ff6b35">Tailscale Admin → Settings → Keys</a></li>
+        <li>Click <strong>Generate auth key</strong>:
+          <ul style="margin:.3rem 0;padding-left:1rem">
+            <li>☑ Reusable (so it survives redeploys)</li>
+            <li>☑ Ephemeral (node auto-removes when container stops)</li>
+          </ul>
+        </li>
+        <li>Copy the key (starts with <code>tskey-auth-...</code>)</li>
+        <li>In Railway → Variables, add:<br>
+          <span class="env-var" style="margin-top:.3rem;display:inline-block">TAILSCALE_AUTH_KEY</span> = <em style="color:#888">tskey-auth-...</em></li>
+        <li>Railway will redeploy. Your instance joins your tailnet as <code>openclaw-railway</code></li>
+        <li><strong>Optional but recommended:</strong> After verifying Tailscale works, go to Railway → Settings → Networking and <strong>disable Public Networking</strong>. This makes your instance completely private — only reachable via Tailscale.</li>
+      </ol>
+      <a href="/setup" class="btn btn-primary" style="margin-top:.8rem">🔄 I added the key — check again</a>
+    </div>
+  </details>`}
+</div>
+
+<!-- Security Overview -->
+<div class="card">
+  <h2>🔒 Security Status</h2>
+  <ul class="env-list">
+    <li class="env-ok">
+      <span>✓</span><span>Gateway bound to <strong>loopback only</strong> — not directly reachable</span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>Token auth — 64-char random, auto-generated</span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>Setup wizard protected by <strong>SETUP_PASSWORD</strong></span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>Railway HTTPS — TLS termination at edge</span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>Non-root container (<code>node</code> user, uid 1000)</span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>Config file permissions — <code>0600</code> (owner-only)</span>
+    </li>
+    <li class="env-ok">
+      <span>✓</span><span>API keys in Railway env vars — never written to config file</span>
+    </li>
+    <li class="${TAILSCALE_AUTH_KEY ? "env-ok" : "env-missing"}">
+      <span>${TAILSCALE_AUTH_KEY ? "✓" : "✗"}</span>
+      <span>${TAILSCALE_AUTH_KEY ? "Tailscale — private network, off public internet" : "No Tailscale — instance is on the <strong>public internet</strong> (see Step 4)"}</span>
+    </li>
+    <li class="env-missing">
+      <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
+    </li>
+  </ul>
 </div>
 
 <!-- Advanced -->
