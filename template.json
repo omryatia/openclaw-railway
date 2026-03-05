@@ -42,11 +42,6 @@
           "name": "DISCORD_BOT_TOKEN",
           "description": "Discord bot token. Optional — enables Discord channel.",
           "required": false
-        },
-        {
-          "name": "TAILSCALE_AUTH_KEY",
-          "description": "Tailscale auth key for private networking. Recommended — takes OpenClaw off the public internet. Generate at: tailscale.com/admin/settings/keys",
-          "required": false
         }
       ],
       "volumes": [
