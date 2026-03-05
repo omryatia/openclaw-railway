@@ -1113,14 +1113,22 @@ const server = http.createServer((req, res) => {
   req.pipe(proxyReq);
 });
 
-// WebSocket passthrough — FIX #2: strip proxy headers, FIX #9: preserve real Origin
+// WebSocket passthrough
 server.on("upgrade", (req, socket, head) => {
   if (!gatewayReady) { socket.destroy(); return; }
+
+  // FIX #12: Enable TCP keepalive on the browser-facing socket to prevent
+  // Railway/Tailscale idle timeouts (code 1006 every ~60s)
+  socket.setKeepAlive(true, 20000); // 20s keepalive interval
+  socket.setNoDelay(true);
+
   const proxy = net.createConnection(GATEWAY_PORT, GATEWAY_HOST, () => {
+    proxy.setKeepAlive(true, 20000);
+    proxy.setNoDelay(true);
+
     const headers = stripProxyHeaders(req.headers);
     headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
 
-    // FIX #10: Inject gateway token for WebSocket auth.
     let wsUrl = req.url || "/";
     const separator = wsUrl.includes("?") ? "&" : "?";
     wsUrl += `${separator}token=${encodeURIComponent(GATEWAY_TOKEN)}`;
@@ -1132,22 +1140,6 @@ server.on("upgrade", (req, socket, head) => {
     );
     proxy.write(head);
     socket.pipe(proxy).pipe(socket);
-
-    // FIX #12: Send WebSocket ping frames to prevent idle timeout.
-    // Railway/Tailscale proxy kills idle WS connections after ~60s.
-    // WebSocket ping frame: 0x89 (fin + opcode 9), 0x00 (no mask, 0 length)
-    const pingInterval = setInterval(() => {
-      try {
-        if (!socket.destroyed && socket.writable) {
-          socket.write(Buffer.from([0x89, 0x00]));
-        } else {
-          clearInterval(pingInterval);
-        }
-      } catch { clearInterval(pingInterval); }
-    }, 25000); // every 25 seconds
-
-    socket.on("close", () => clearInterval(pingInterval));
-    proxy.on("close", () => clearInterval(pingInterval));
   });
   proxy.on("error", () => socket.destroy());
   socket.on("error", () => proxy.destroy());
@@ -1155,6 +1147,11 @@ server.on("upgrade", (req, socket, head) => {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
+
+// Prevent Node.js default timeouts from killing long-lived WebSocket connections
+server.timeout = 0;                // disable request timeout entirely
+server.keepAliveTimeout = 120000;  // 2 minutes for HTTP keep-alive
+server.headersTimeout = 120000;    // 2 minutes for headers
 server.listen(PORT, () => {
   console.log(`[wrapper] Listening on :${PORT}`);
   console.log(`[wrapper] Public URL: ${PUBLIC_URL || "(not set)"}`);
