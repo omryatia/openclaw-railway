@@ -64,6 +64,14 @@ const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
 const PUBLIC_URL = PUBLIC_DOMAIN ? `https://${PUBLIC_DOMAIN}` : "";
 const PRIVATE_DOMAIN = process.env.RAILWAY_PRIVATE_DOMAIN || "";
 
+// Build allowedOrigins from all known domains (public HTTPS + private HTTP)
+function buildAllowedOrigins() {
+  const origins = [];
+  if (PUBLIC_URL) origins.push(PUBLIC_URL);
+  if (PRIVATE_DOMAIN) origins.push(`http://${PRIVATE_DOMAIN}:${PORT}`);
+  return origins.length > 0 ? origins : ["*"];
+}
+
 // FIX #2 (CRITICAL): Strip proxy headers before forwarding to gateway.
 //
 // OLD CODE: `const headers = { ...req.headers }` — forwarded ALL headers
@@ -233,13 +241,13 @@ function patchConfig(reason) {
     }
 
     // Check if security patch is actually needed before writing
-    const origins = config.gateway?.controlUi?.allowedOrigins || [];
-    const expectedOrigin = PUBLIC_URL || "*";
+    const currentOrigins = JSON.stringify(config.gateway?.controlUi?.allowedOrigins || []);
+    const expectedOrigins = JSON.stringify(buildAllowedOrigins());
     const alreadyPatched =
       config.gateway?.bind === "loopback" &&
       config.gateway?.auth?.token === GATEWAY_TOKEN &&
       config.gateway?.trustedProxies?.includes("127.0.0.1") &&
-      (origins[0] === expectedOrigin || origins[0] === PUBLIC_URL);
+      currentOrigins === expectedOrigins;
 
     if (alreadyPatched && !didMigrate) return false;
 
@@ -248,7 +256,7 @@ function patchConfig(reason) {
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = GATEWAY_TOKEN;
     config.gateway.controlUi = config.gateway.controlUi || {};
-    config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+    config.gateway.controlUi.allowedOrigins = buildAllowedOrigins();
     // FIX #11: Disable device identity auth for the Control UI.
     // Behind Railway's proxy, the wrapper already handles access control
     // (SETUP_PASSWORD). Device pairing uses WebCrypto and requires an
@@ -258,7 +266,7 @@ function patchConfig(reason) {
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
-    console.log(`[config] Patched (${reason || "manual"}) — origin: ${config.gateway.controlUi.allowedOrigins[0]}`);
+    console.log(`[config] Patched (${reason || "manual"}) — origins: ${JSON.stringify(config.gateway.controlUi.allowedOrigins)}`);
     didPatch = true;
   } catch (e) {
     console.error("[config] Patch failed:", e.message);
@@ -499,9 +507,10 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <span>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></span>
     ${activeProvider ? `<span>Provider: <span class="badge ok">${activeProvider.name}</span></span>` : '<span>Provider: <span class="badge err-badge">Not configured</span></span>'}
     ${currentModel ? `<span>Model: <span class="badge ok">${currentModel}</span></span>` : ""}
-    <span>Network: <span class="badge warn">Public${PRIVATE_DOMAIN ? ` · Private: ${PRIVATE_DOMAIN}` : ""}</span></span>
+    <span>Network: <span class="badge ${PUBLIC_URL ? "warn" : "ok"}">${PUBLIC_URL ? "Public" : "🔒 Private"}${PRIVATE_DOMAIN ? ` · ${PRIVATE_DOMAIN}` : ""}</span></span>
   </div>
   ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
+  ${PRIVATE_DOMAIN ? `<div class="domain">🔒 http://${PRIVATE_DOMAIN}:${PORT}</div>` : ""}
   ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
 </div>
 
@@ -718,12 +727,19 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     Take OpenClaw <strong>off the public internet</strong>. Only devices on your private Tailscale network (tailnet) can reach it.
   </p>
 
+  ${PUBLIC_URL ? `
   <div style="margin-top:.8rem;padding:.8rem 1rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
     <p style="color:#ff9800;margin:0 0 .3rem;font-size:.9rem">⚠ Currently your OpenClaw is on the public internet</p>
     <p style="color:#888;font-size:.85rem;margin:0">
       The URL is obscure and auth-gated, but anyone who finds it can attempt to connect.
     </p>
-  </div>
+  </div>` : `
+  <div style="margin-top:.8rem;padding:.8rem 1rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px">
+    <p style="color:#4caf50;margin:0 0 .3rem;font-size:.9rem">✓ Public networking disabled — OpenClaw is private</p>
+    <p style="color:#888;font-size:.85rem;margin:0">
+      Only accessible via Railway's private network through your Tailscale tailnet.
+    </p>
+  </div>`}
 
   <details style="margin-top:.8rem">
     <summary class="channel-summary">
@@ -831,9 +847,11 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
         ? `Tool allowlist active — ${config.tools.allow.length} tools enabled (see Step 3)` 
         : "No tool policy — all tools enabled by default (configure in Step 3)"}</span>
     </li>
-    <li class="env-missing">
-      <span>⚠</span>
-      <span>Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> to go private (Step 5)${PRIVATE_DOMAIN ? ` · Private domain: <code>${PRIVATE_DOMAIN}</code>` : ""}</span>
+    <li class="${PUBLIC_URL ? "env-missing" : "env-ok"}">
+      <span>${PUBLIC_URL ? "⚠" : "✓"}</span>
+      <span>${PUBLIC_URL 
+        ? `Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> then disable public networking (Step 5)` 
+        : "Private network only — not accessible from the public internet"}</span>
     </li>
     <li class="env-missing">
       <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
@@ -934,7 +952,7 @@ const server = http.createServer((req, res) => {
           config.gateway.controlUi = config.gateway.controlUi || {};
           config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           if (!config.gateway.controlUi.allowedOrigins) {
-            config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+            config.gateway.controlUi.allowedOrigins = buildAllowedOrigins();
           }
 
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
@@ -1026,7 +1044,7 @@ const server = http.createServer((req, res) => {
           parsed.gateway.controlUi = parsed.gateway.controlUi || {};
           parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           if (!parsed.gateway.controlUi.allowedOrigins) {
-            parsed.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+            parsed.gateway.controlUi.allowedOrigins = buildAllowedOrigins();
           }
           parsed.agents = parsed.agents || {};
           parsed.agents.defaults = parsed.agents.defaults || {};
