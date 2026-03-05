@@ -20,15 +20,12 @@ RUN pnpm ui:build
 # ─────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runtime
 
-# gosu: drop privileges after fixing volume ownership at runtime
+# Runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     gosu \
     ca-certificates \
     curl \
-    && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null \
-    && curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | tee /etc/apt/sources.list.d/tailscale.list \
-    && apt-get update && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy runtime files from the OpenClaw build.
