@@ -24,6 +24,13 @@
       }
     }
   },
+  "tools": {
+    "allow": ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
+    "deny": ["exec"],
+    "elevated": {
+      "enabled": false
+    }
+  },
   "channels": {
     "telegram": {
       "dmPolicy": "pairing"
