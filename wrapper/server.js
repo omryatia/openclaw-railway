@@ -62,6 +62,7 @@ const DISCORD_BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN || "";
 // Railway provides this automatically — use it for dynamic origin allowlist
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
 const PUBLIC_URL = PUBLIC_DOMAIN ? `https://${PUBLIC_DOMAIN}` : "";
+const PRIVATE_DOMAIN = process.env.RAILWAY_PRIVATE_DOMAIN || "";
 
 // FIX #2 (CRITICAL): Strip proxy headers before forwarding to gateway.
 //
@@ -498,7 +499,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <span>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></span>
     ${activeProvider ? `<span>Provider: <span class="badge ok">${activeProvider.name}</span></span>` : '<span>Provider: <span class="badge err-badge">Not configured</span></span>'}
     ${currentModel ? `<span>Model: <span class="badge ok">${currentModel}</span></span>` : ""}
-    <span>Network: <span class="badge warn">Public (see Step 5 for private access)</span></span>
+    <span>Network: <span class="badge warn">Public${PRIVATE_DOMAIN ? ` · Private: ${PRIVATE_DOMAIN}` : ""}</span></span>
   </div>
   ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
   ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
@@ -732,13 +733,16 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     </summary>
     <div class="guide">
       <p style="color:#aaa;font-size:.85rem;margin:.5rem 0">
-        Railway uses a <strong>Subnet Router</strong> — a separate Tailscale service in your project that bridges your tailnet to Railway's private network. OpenClaw itself doesn't need Tailscale installed.
+        Railway uses a <strong>Subnet Router</strong> — a separate Tailscale service deployed into your project that bridges your tailnet to Railway's private network. OpenClaw itself doesn't need Tailscale installed.
       </p>
 
       <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step A: Tailscale Account & App</p>
       <ol>
         <li>Sign up at <a href="https://login.tailscale.com/start" target="_blank" style="color:#ff6b35">tailscale.com</a> (free for personal use)</li>
         <li>Install Tailscale on the devices you'll access OpenClaw from (laptop, phone, etc.)</li>
+        <li>Enable subnet route acceptance on your device:<br>
+          <strong>Linux:</strong> <code>sudo tailscale set --accept-routes</code><br>
+          <strong>macOS / Windows:</strong> Open Tailscale → Settings → enable <em>"Use Tailscale subnets"</em> or <em>"Accept Routes"</em></li>
       </ol>
 
       <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step B: Generate an Auth Key</p>
@@ -761,15 +765,21 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
         <li>In your Railway project, click <strong>Create → Template</strong></li>
         <li>Search for <strong>Tailscale Subnet Router</strong> (by Railway Templates)</li>
         <li>Paste your auth key and deploy</li>
-        <li>In <a href="https://login.tailscale.com/admin/machines" target="_blank" style="color:#ff6b35">Tailscale Machines</a>, find the new machine → <strong>Edit route settings</strong> → accept the <code>fd12::/16</code> subnet</li>
+        <li>In <a href="https://login.tailscale.com/admin/machines" target="_blank" style="color:#ff6b35">Tailscale Machines</a>, find the new machine → click <strong>⋯ → Edit route settings</strong></li>
+        <li>Click <strong>Approve all</strong> to accept both <code>fd12::/16</code> (IPv6) and <code>10.128.0.0/9</code> (IPv4) → <strong>Save</strong></li>
       </ol>
 
       <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:.8rem 0 .3rem">Step E: Access OpenClaw Privately</p>
+      ${PRIVATE_DOMAIN ? `
+      <div style="padding:.6rem .8rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;margin-bottom:.6rem">
+        <p style="color:#4caf50;font-size:.9rem;margin:0">Your private domain:</p>
+        <code style="font-size:.95rem;display:block;margin-top:.3rem">http://${PRIVATE_DOMAIN}:${PORT}/setup</code>
+      </div>` : ""}
       <ol>
-        <li>Make sure your OpenClaw service listens on all interfaces — it already does via Railway's <code>PORT</code></li>
-        <li>From a device on your tailnet, access OpenClaw via its private domain:<br>
-          <code style="display:inline-block;margin-top:.3rem">http://openclaw.railway.internal:${PORT}/setup</code></li>
-        <li><strong>Optional:</strong> Disable <strong>Public Networking</strong> in Railway → your OpenClaw service → Settings.<br>
+        <li>From a device on your tailnet, open:<br>
+          <code style="display:inline-block;margin-top:.3rem">http://${PRIVATE_DOMAIN || "<your-service>.railway.internal"}:${PORT}/setup</code></li>
+        <li>Enter your <strong>SETUP_PASSWORD</strong> when prompted</li>
+        <li><strong>To go fully private:</strong> In Railway → your OpenClaw service → Settings → Networking, delete the public domain.<br>
           This makes OpenClaw <strong>completely invisible</strong> on the internet — only reachable through your tailnet.</li>
       </ol>
 
@@ -823,7 +833,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     </li>
     <li class="env-missing">
       <span>⚠</span>
-      <span>Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> to go private (see Step 5)</span>
+      <span>Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> to go private (Step 5)${PRIVATE_DOMAIN ? ` · Private domain: <code>${PRIVATE_DOMAIN}</code>` : ""}</span>
     </li>
     <li class="env-missing">
       <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
