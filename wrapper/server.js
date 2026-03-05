@@ -221,6 +221,17 @@ function patchConfig(reason) {
       console.log("[config] Set default tool policy (exec disabled, safe tools only)");
     }
 
+    // Clean stale tailscale config — Tailscale is handled by entrypoint.sh,
+    // not OpenClaw config. These keys cause "Unrecognized key" fatal errors.
+    if (config.gateway?.tailscale) {
+      delete config.gateway.tailscale;
+      didMigrate = true;
+    }
+    if (config.gateway?.auth?.allowTailscale !== undefined) {
+      delete config.gateway.auth.allowTailscale;
+      didMigrate = true;
+    }
+
     // Check if security patch is actually needed before writing
     const origins = config.gateway?.controlUi?.allowedOrigins || [];
     const expectedOrigin = PUBLIC_URL || "*";
@@ -245,10 +256,6 @@ function patchConfig(reason) {
     // token auth succeeds (code 4008 "connect failed").
     config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
     config.gateway.trustedProxies = ["127.0.0.1", "::1"];
-    if (TAILSCALE_AUTH_KEY) {
-      config.gateway.tailscale = { mode: "serve", authKey: TAILSCALE_AUTH_KEY };
-      config.gateway.auth.allowTailscale = true;
-    }
 
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
     console.log(`[config] Patched (${reason || "manual"}) — origin: ${config.gateway.controlUi.allowedOrigins[0]}`);
@@ -470,6 +477,9 @@ details[open]>.channel-summary::before{transform:rotate(90deg)}
 .tool-check{display:flex;align-items:center;gap:.5rem;color:#aaa;font-size:.88rem;cursor:pointer;padding:.3rem .4rem;border-radius:4px}
 .tool-check:hover{background:#1a1a1a}
 .tool-check input{cursor:pointer;width:1rem;height:1rem;accent-color:#ff6b35}
+.tool-row{display:flex;flex-direction:column}
+.tool-approval{display:flex;align-items:center;gap:.5rem;color:#4caf50;font-size:.83rem;cursor:pointer;padding:.2rem .4rem .2rem 2rem;border-radius:4px}
+.tool-approval input{cursor:pointer;width:1rem;height:1rem;accent-color:#4caf50}
 .actions{display:flex;gap:.8rem;margin-top:1.2rem;flex-wrap:wrap}
 .domain{color:#4caf50;font-size:.85rem;margin-top:.5rem}
 .status-row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem}
@@ -585,12 +595,22 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
 
       <label>⚠ Dangerous Tools</label>
       <div style="padding:.6rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
-        <label class="tool-check" style="color:#ff9800"><input type="checkbox" name="tools" value="exec" ${(config.tools?.allow || []).includes("exec") ? "checked" : ""}> <code>exec</code> — Run shell commands <strong>(can execute anything!)</strong></label>
-        <label class="tool-check" style="color:#ff9800;margin-top:.4rem"><input type="checkbox" name="tools" value="browser" ${(config.tools?.allow || []).includes("browser") ? "checked" : ""}> <code>browser</code> — Browser automation</label>
-        <div class="hint" style="margin-top:.5rem;color:#f44336">
+        <div class="tool-row">
+          <label class="tool-check" style="color:#ff9800"><input type="checkbox" name="tools" value="exec" id="cb-exec" onchange="toggleApproval('exec')" ${(config.tools?.allow || []).includes("exec") ? "checked" : ""}> <code>exec</code> — Run shell commands <strong>(can execute anything!)</strong></label>
+          <label class="tool-approval" id="approval-exec" style="display:${(config.tools?.allow || []).includes("exec") ? "flex" : "none"}">
+            <input type="checkbox" name="approval_exec" value="true" ${config.tools?.elevated?.elevatedDefault === "on" ? "" : "checked"}> 🛡 Require approval before each command
+          </label>
+        </div>
+        <div class="tool-row" style="margin-top:.5rem">
+          <label class="tool-check" style="color:#ff9800"><input type="checkbox" name="tools" value="browser" id="cb-browser" onchange="toggleApproval('browser')" ${(config.tools?.allow || []).includes("browser") ? "checked" : ""}> <code>browser</code> — Browser automation</label>
+        </div>
+        <div class="tool-row" style="margin-top:.5rem">
+          <label class="tool-check" style="color:#ff9800"><input type="checkbox" name="tools" value="mcp" id="cb-mcp" onchange="toggleApproval('mcp')" ${(config.tools?.allow || []).includes("mcp") ? "checked" : ""}> <code>mcp</code> — External tool servers (MCP)</label>
+        </div>
+        <div class="hint" style="margin-top:.6rem;color:#f44336">
           ⚠ <code>exec</code> gives the agent full shell access inside the container.
-          It can install packages, modify files, and run arbitrary commands.
-          Only enable if you understand the risks.
+          With approval enabled, every command is shown to you first and only runs after you confirm.
+          <strong>Never enable exec without approval on a public-facing instance.</strong>
         </div>
       </div>
     </div>
@@ -780,11 +800,13 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <li class="env-ok">
       <span>✓</span><span>Gateway bound to <strong>127.0.0.1</strong> (loopback) — enforced, cannot be changed via UI</span>
     </li>
-    <li class="${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "env-ok" : "env-missing"}">
-      <span>${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "✓" : "⚠"}</span>
+    <li class="${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "env-ok" : config.tools?.elevated?.elevatedDefault !== "on" ? "env-ok" : "env-missing"}">
+      <span>${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "✓" : config.tools?.elevated?.elevatedDefault !== "on" ? "✓" : "⚠"}</span>
       <span>${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") 
         ? "Shell exec <strong>disabled</strong> — agent cannot run arbitrary commands" 
-        : "<code>exec</code> is <strong>enabled</strong> — agent can run shell commands (see Step 3)"}</span>
+        : config.tools?.elevated?.elevatedDefault !== "on"
+          ? "Shell exec enabled with <strong>approval required</strong> — every command needs your confirmation"
+          : "<code>exec</code> enabled <strong>without approval</strong> — agent can run commands freely (dangerous!)"}</span>
     </li>
     <li class="${config.tools?.allow ? "env-ok" : "env-missing"}">
       <span>${config.tools?.allow ? "✓" : "⚠"}</span>
@@ -814,6 +836,20 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     </form>
   </details>
 </div>
+
+<script>
+function toggleApproval(tool) {
+  var cb = document.getElementById('cb-' + tool);
+  var approval = document.getElementById('approval-' + tool);
+  if (approval) {
+    approval.style.display = cb.checked ? 'flex' : 'none';
+    if (cb.checked) {
+      var approvalCb = approval.querySelector('input');
+      if (approvalCb) approvalCb.checked = true;
+    }
+  }
+}
+</script>
 
 </body></html>`;
 }
@@ -913,14 +949,27 @@ const server = http.createServer((req, res) => {
           config.tools = config.tools || {};
           config.tools.allow = selectedTools.length > 0 ? selectedTools : ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"];
 
-          // If exec is not in the allowed list, explicitly deny it
+          // Handle exec approval setting
+          const execApproval = params.get("approval_exec") === "true";
+
           if (!selectedTools.includes("exec")) {
             config.tools.deny = ["exec"];
             config.tools.elevated = { enabled: false };
-          } else {
-            // exec enabled — remove from deny, enable elevated with approval
+          } else if (execApproval) {
+            // exec enabled WITH approval — elevatedDefault:"off" means user must
+            // opt-in per session via /elevated on, and each command needs confirmation
             config.tools.deny = [];
-            config.tools.elevated = { enabled: true, elevatedDefault: "off" };
+            config.tools.elevated = {
+              enabled: true,
+              elevatedDefault: "off"
+            };
+          } else {
+            // exec enabled WITHOUT approval — commands run freely
+            config.tools.deny = [];
+            config.tools.elevated = {
+              enabled: true,
+              elevatedDefault: "on"
+            };
           }
 
           // Apply security invariants
@@ -932,7 +981,7 @@ const server = http.createServer((req, res) => {
           config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
 
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
-          console.log(`[setup] Tool policy: allow=[${selectedTools.join(",")}], exec=${selectedTools.includes("exec") ? "ON" : "OFF"}`);
+          console.log(`[setup] Tool policy: allow=[${selectedTools.join(",")}], exec=${selectedTools.includes("exec") ? (execApproval ? "ON+approval" : "ON+no-approval") : "OFF"}`);
 
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(config, true));
