@@ -1,6 +1,6 @@
 {
   "name": "OpenClaw (Secure)",
-  "description": "Self-hosted personal AI assistant via WhatsApp, Telegram, Slack, Discord and more. Hardened deployment: loopback-only gateway, required token auth, DM allowlist, sandbox for group sessions, non-root container.",
+  "description": "Self-hosted personal AI assistant via WhatsApp, Telegram, Slack, Discord and more. Hardened deployment: loopback-only gateway, required token auth, DM pairing, sandbox for group sessions, non-root container. Setup wizard for easy provider & model selection.",
   "tags": ["ai", "assistant", "telegram", "discord", "slack", "llm", "personal-ai"],
   "readmeUrl": "https://github.com/omryatia/openclaw-railway/blob/main/README.md",
   "demoUrl": "https://docs.openclaw.ai",
@@ -13,22 +13,24 @@
       "variables": [
         {
           "name": "GATEWAY_TOKEN",
-          "description": "Auth token for the OpenClaw gateway. REQUIRED. Min 32 chars. Generate with: openssl rand -hex 32",
-          "required": true
+          "description": "Auth token for the gateway. Auto-generated — do not change unless you know what you're doing.",
+          "required": true,
+          "defaultValue": "${{ secret(64) }}"
         },
         {
           "name": "SETUP_PASSWORD",
-          "description": "Password for the /setup wizard. REQUIRED. Min 12 chars.",
-          "required": true
+          "description": "Password for the /setup wizard. Auto-generated — save this from your Railway Variables tab.",
+          "required": true,
+          "defaultValue": "${{ secret(24) }}"
         },
         {
           "name": "ANTHROPIC_API_KEY",
-          "description": "Anthropic API key (for Claude models). Provide this OR OPENROUTER_API_KEY.",
+          "description": "Optional — you can also set this via the /setup wizard after deploy.",
           "required": false
         },
         {
           "name": "OPENROUTER_API_KEY",
-          "description": "OpenRouter API key (access to GPT-4o, Claude, Gemini via one key).",
+          "description": "Optional — you can also set this via the /setup wizard after deploy.",
           "required": false
         },
         {
@@ -39,6 +41,11 @@
         {
           "name": "DISCORD_BOT_TOKEN",
           "description": "Discord bot token. Optional — enables Discord channel.",
+          "required": false
+        },
+        {
+          "name": "TAILSCALE_AUTH_KEY",
+          "description": "Tailscale auth key for private networking. Recommended — takes OpenClaw off the public internet. Generate at: tailscale.com/admin/settings/keys",
           "required": false
         }
       ],
