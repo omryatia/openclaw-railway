@@ -362,6 +362,8 @@ function pollGatewayReady(attempts = 0) {
       gatewayReady = true;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
+      console.log("[gateway] Note: 'dangerouslyDisableDeviceAuth' security warning is expected.");
+      console.log("[gateway] Device auth is handled by the wrapper's SETUP_PASSWORD + Railway HTTPS.");
       watchConfig();
     }
   });
