@@ -109,8 +109,7 @@ if (!GATEWAY_TOKEN || GATEWAY_TOKEN.length < 32)
   configErrors.push("GATEWAY_TOKEN is missing or too short (min 32 chars).");
 if (!SETUP_PASSWORD || SETUP_PASSWORD.length < 8)
   configErrors.push("SETUP_PASSWORD is missing or too short (min 8 chars).");
-if (!ANTHROPIC_API_KEY && !OPENROUTER_API_KEY && !OPENAI_API_KEY)
-  configErrors.push("No AI provider key set. Add ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY.");
+// Note: AI provider keys are no longer required at boot — users set them via /setup wizard
 
 if (configErrors.length > 0) {
   console.warn("[warn] Configuration issues:");
@@ -192,6 +191,12 @@ function patchConfig(reason) {
       delete config.gateway.auth.allowInsecureAuth;
       didMigrate = true;
     }
+    // Remove auth section from config — API keys belong in Railway env vars only
+    if (config.auth) {
+      delete config.auth;
+      didMigrate = true;
+      console.log("[config] Removed auth section from config (keys should be in Railway env vars)");
+    }
 
     // FIX #8: dmPolicy "allowlist" with empty allowFrom is a fatal config error.
     // Switch to "pairing" when no IDs are configured — users can pair interactively
@@ -252,18 +257,16 @@ try {
   if (isFirstRun() && GATEWAY_TOKEN.length >= 32) {
     const defaults = JSON.parse(fs.readFileSync(DEFAULTS_PATH, "utf8"));
 
-    // FIX #6 continued: Write config using the new agents.defaults.model.primary
-    // format from the start, NOT the deprecated `agent.model` string.
     defaults.agents = defaults.agents || {};
     defaults.agents.defaults = defaults.agents.defaults || {};
     defaults.agents.defaults.model = defaults.agents.defaults.model || {};
+    delete defaults.agent;
 
+    // Set model based on which env var key is present (keys stay in env vars, not config)
     if (ANTHROPIC_API_KEY)       defaults.agents.defaults.model.primary = "anthropic/claude-opus-4-6";
     else if (OPENROUTER_API_KEY) defaults.agents.defaults.model.primary = "openrouter/auto";
     else if (OPENAI_API_KEY)     defaults.agents.defaults.model.primary = "openai/gpt-4o";
-
-    // Remove any leftover deprecated `agent` key from the defaults template
-    delete defaults.agent;
+    // No key? User will pick model in /setup wizard after adding a key in Railway
 
     if (TELEGRAM_BOT_TOKEN)
       defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "pairing" };
@@ -395,8 +398,19 @@ li{margin:.5rem 0}.err{color:#f44336}</style></head>
 }
 
 function setupPage(config, saved = false, error = "") {
+  // Detect which provider keys are set via Railway env vars
+  const providers = [
+    { id: "anthropic", name: "Anthropic (Claude)", envVar: "ANTHROPIC_API_KEY", hasKey: !!ANTHROPIC_API_KEY },
+    { id: "openrouter", name: "OpenRouter (multi-provider)", envVar: "OPENROUTER_API_KEY", hasKey: !!OPENROUTER_API_KEY },
+    { id: "openai", name: "OpenAI (GPT)", envVar: "OPENAI_API_KEY", hasKey: !!OPENAI_API_KEY },
+  ];
+  const activeProvider = providers.find(p => p.hasKey);
+  const currentModel = config.agents?.defaults?.model?.primary || "";
+  const hasAnyKey = providers.some(p => p.hasKey);
+
   const configStr = JSON.stringify(config, null, 2)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
   return `<!DOCTYPE html><html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenClaw Setup</title>
@@ -404,44 +418,150 @@ function setupPage(config, saved = false, error = "") {
 *{box-sizing:border-box}
 body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#e0e0e0;margin:0;padding:2rem}
 h1{color:#ff6b35;margin-bottom:.25rem}
-.subtitle{color:#888;margin-bottom:2rem;font-size:.9rem}
-label{display:block;margin-top:1.5rem;margin-bottom:.4rem;font-weight:600;color:#aaa;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em}
-textarea{width:100%;height:380px;padding:.6rem .8rem;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#e0e0e0;font-family:monospace;font-size:.85rem;resize:vertical}
-button{margin-top:1.5rem;padding:.7rem 1.6rem;background:#ff6b35;border:none;border-radius:6px;color:#fff;font-size:1rem;font-weight:600;cursor:pointer}
-button:hover{background:#e55a28}
-.card{background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:1.5rem 2rem;max-width:860px}
+h2{color:#e0e0e0;font-size:1.1rem;margin-top:1.5rem;margin-bottom:.8rem;border-bottom:1px solid #2a2a2a;padding-bottom:.4rem}
+.subtitle{color:#888;margin-bottom:1.5rem;font-size:.9rem}
+label{display:block;margin-top:1rem;margin-bottom:.4rem;font-weight:600;color:#aaa;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em}
+select,textarea{width:100%;padding:.6rem .8rem;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#e0e0e0;font-size:.9rem}
+select:focus,textarea:focus{border-color:#ff6b35;outline:none}
+select{cursor:pointer;appearance:auto}
+textarea{height:320px;font-family:monospace;font-size:.82rem;resize:vertical}
+button,.btn{display:inline-block;margin-top:1rem;padding:.65rem 1.4rem;border:none;border-radius:6px;font-size:.95rem;font-weight:600;cursor:pointer;text-decoration:none;text-align:center}
+.btn-primary{background:#ff6b35;color:#fff}.btn-primary:hover{background:#e55a28}
+.btn-success{background:#4caf50;color:#fff}.btn-success:hover{background:#3d8b40}
+.btn-outline{background:transparent;color:#aaa;border:1px solid #444}.btn-outline:hover{border-color:#ff6b35;color:#ff6b35}
+.card{background:#161616;border:1px solid #2a2a2a;border-radius:10px;padding:1.5rem 2rem;max-width:860px;margin-bottom:1.5rem}
 .badge{display:inline-block;border-radius:4px;padding:.2rem .6rem;font-size:.75rem;margin-left:.5rem}
-.ok{background:#1a3a1a;color:#4caf50}.warn{background:#3a2a1a;color:#ff9800}
+.ok{background:#1a3a1a;color:#4caf50}.warn{background:#3a2a1a;color:#ff9800}.err-badge{background:#3a1a1a;color:#f44336}
 .saved{color:#4caf50;font-weight:600;margin-top:1rem}
 .error{color:#f44336;font-weight:600;margin-top:1rem}
 .hint{color:#666;font-size:.8rem;margin-top:.3rem}
-.domain{color:#4caf50;font-size:.8rem;margin-top:.5rem}
-ul{color:#aaa;font-size:.85rem;line-height:1.8}
-a{color:#ff6b35}
+.env-list{list-style:none;padding:0;margin:.8rem 0}
+.env-list li{padding:.5rem .8rem;margin:.3rem 0;border-radius:6px;font-size:.9rem;display:flex;align-items:center;gap:.6rem}
+.env-ok{background:#1a2a1a;border:1px solid #2a4a2a}
+.env-missing{background:#2a1a1a;border:1px solid #4a2a2a}
+.env-var{font-family:monospace;font-weight:600;color:#e0e0e0}
+.env-hint{color:#888;font-size:.8rem}
+.models{display:none;margin-top:.5rem}
+.models.active{display:block}
+details{margin-top:1.5rem}
+details summary{cursor:pointer;color:#aaa;font-size:.9rem;padding:.5rem 0}
+details summary:hover{color:#ff6b35}
+.actions{display:flex;gap:.8rem;margin-top:1.2rem;flex-wrap:wrap}
+.domain{color:#4caf50;font-size:.85rem;margin-top:.5rem}
+.status-row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem}
+.step-num{display:inline-flex;align-items:center;justify-content:center;width:1.6rem;height:1.6rem;border-radius:50%;background:#ff6b35;color:#fff;font-size:.8rem;font-weight:700;margin-right:.4rem}
+.step-done{background:#4caf50}
+code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;color:#ff6b35}
 </style></head>
-<body><div class="card">
-<h1>🦞 OpenClaw Setup</h1>
-<div class="subtitle">Secure self-hosted AI assistant — Railway deployment</div>
-${saved ? '<p class="saved">✓ Config saved. Restart the service in Railway to apply changes.</p>' : ""}
-${error ? `<p class="error">✗ ${error}</p>` : ""}
-<h3>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></h3>
-${PUBLIC_URL ? `<div class="domain">🌐 Public URL: <a href="${PUBLIC_URL}" target="_blank">${PUBLIC_URL}</a></div>` : ""}
-${gatewayReady ? `<div style="margin-top:.8rem"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" style="display:inline-block;padding:.5rem 1.2rem;background:#4caf50;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:.9rem">Open Control UI ↗</a></div>` : ""}
-<h3>Security defaults</h3>
-<ul>
-  <li>✓ Gateway bound to loopback only</li>
-  <li>✓ Token auth enforced</li>
-  <li>✓ DM policy: <strong>pairing</strong> (switch to allowlist after adding sender IDs)</li>
-  <li>✓ Sandbox for group/channel sessions</li>
-  <li>✓ Allowed origin: <strong>${PUBLIC_URL || "*"}</strong></li>
-</ul>
-<form method="POST" action="/setup">
-  <label for="config">openclaw.json — <a href="https://docs.openclaw.ai/gateway/configuration" target="_blank">config reference ↗</a></label>
-  <textarea name="config" id="config">${configStr}</textarea>
-  <div class="hint">Saved to /data/.openclaw/openclaw.json — persists across restarts and redeploys.</div>
-  <button type="submit">Save config</button>
-</form>
-</div></body></html>`;
+<body>
+<div class="card">
+  <h1>🦞 OpenClaw Setup</h1>
+  <div class="subtitle">Secure self-hosted AI assistant — Railway deployment</div>
+
+  ${saved ? '<p class="saved">✓ Configuration saved. The gateway will reload automatically.</p>' : ""}
+  ${error ? `<p class="error">✗ ${error}</p>` : ""}
+
+  <div class="status-row">
+    <span>Gateway: <span class="badge ${gatewayReady ? "ok" : "warn"}">${gatewayReady ? "Running ✓" : "Starting..."}</span></span>
+    ${activeProvider ? `<span>Provider: <span class="badge ok">${activeProvider.name}</span></span>` : '<span>Provider: <span class="badge err-badge">Not configured</span></span>'}
+    ${currentModel ? `<span>Model: <span class="badge ok">${currentModel}</span></span>` : ""}
+  </div>
+  ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
+  ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
+</div>
+
+<!-- Step 1: API Key -->
+<div class="card">
+  <h2><span class="step-num ${hasAnyKey ? "step-done" : ""}">1</span> API Provider Key</h2>
+  <p style="color:#aaa;font-size:.9rem;margin-bottom:1rem">
+    API keys are stored securely in Railway environment variables — never in the config file.
+    ${!hasAnyKey ? "Add one of these in <strong>Railway → your service → Variables</strong>:" : ""}
+  </p>
+  <ul class="env-list">
+    ${providers.map(p => `
+    <li class="${p.hasKey ? "env-ok" : "env-missing"}">
+      <span>${p.hasKey ? "✓" : "✗"}</span>
+      <span class="env-var">${p.envVar}</span>
+      <span class="env-hint">— ${p.name}</span>
+    </li>`).join("")}
+  </ul>
+  ${!hasAnyKey ? `
+  <div style="margin-top:1rem;padding:1rem;background:#1a1a1a;border-radius:6px;border:1px solid #333">
+    <p style="color:#ff9800;margin:0 0 .5rem">How to add your API key:</p>
+    <ol style="color:#aaa;font-size:.85rem;margin:0;padding-left:1.2rem;line-height:1.8">
+      <li>Open Railway → your <strong>openclaw</strong> service → <strong>Variables</strong> tab</li>
+      <li>Click <strong>New Variable</strong></li>
+      <li>Set the name to <code>OPENROUTER_API_KEY</code> (or another provider above)</li>
+      <li>Paste your API key as the value</li>
+      <li>Railway will <strong>automatically redeploy</strong> — come back to this page after</li>
+    </ol>
+  </div>` : `
+  <div class="hint">To change provider, update the environment variable in Railway → Variables.</div>`}
+</div>
+
+<!-- Step 2: Model Selection -->
+<div class="card">
+  <h2><span class="step-num ${currentModel && hasAnyKey ? "step-done" : ""}">2</span> Model Selection</h2>
+  ${hasAnyKey ? `
+  <form method="POST" action="/setup/model">
+    <label for="model">Choose your model</label>
+    ${ANTHROPIC_API_KEY ? `
+    <select name="model" id="model">
+      <option value="anthropic/claude-opus-4-6" ${currentModel === "anthropic/claude-opus-4-6" ? "selected" : ""}>Claude Opus 4.6 (most capable)</option>
+      <option value="anthropic/claude-sonnet-4-5-20250929" ${currentModel.includes("sonnet") ? "selected" : ""}>Claude Sonnet 4.5</option>
+      <option value="anthropic/claude-haiku-4-5-20251001" ${currentModel.includes("haiku") ? "selected" : ""}>Claude Haiku 4.5 (fast & cheap)</option>
+    </select>` : ""}
+    ${OPENROUTER_API_KEY ? `
+    <select name="model" id="model">
+      <option value="openrouter/anthropic/claude-sonnet-4-5-20250929" ${currentModel.includes("sonnet") ? "selected" : ""}>Claude Sonnet 4.5 via OpenRouter</option>
+      <option value="openrouter/anthropic/claude-opus-4-6" ${currentModel.includes("opus") ? "selected" : ""}>Claude Opus 4.6 via OpenRouter</option>
+      <option value="openrouter/openai/gpt-4o" ${currentModel.includes("gpt-4o") ? "selected" : ""}>GPT-4o via OpenRouter</option>
+      <option value="openrouter/google/gemini-2.5-pro" ${currentModel.includes("gemini") ? "selected" : ""}>Gemini 2.5 Pro via OpenRouter</option>
+      <option value="openrouter/auto" ${currentModel === "openrouter/auto" ? "selected" : ""}>Auto (OpenRouter picks best)</option>
+    </select>` : ""}
+    ${OPENAI_API_KEY ? `
+    <select name="model" id="model">
+      <option value="openai/gpt-4o" ${currentModel === "openai/gpt-4o" ? "selected" : ""}>GPT-4o</option>
+      <option value="openai/gpt-4.1" ${currentModel === "openai/gpt-4.1" ? "selected" : ""}>GPT-4.1</option>
+      <option value="openai/o3" ${currentModel === "openai/o3" ? "selected" : ""}>o3 (reasoning)</option>
+    </select>` : ""}
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem">Save Model</button>
+  </form>
+  ` : `<p style="color:#666">Complete Step 1 first — add an API key in Railway Variables.</p>`}
+</div>
+
+<!-- Step 3: Channels (info) -->
+<div class="card">
+  <h2><span class="step-num">3</span> Messaging Channels (optional)</h2>
+  <p style="color:#aaa;font-size:.9rem">Add these in Railway → Variables to enable chat channels:</p>
+  <ul class="env-list">
+    <li class="${TELEGRAM_BOT_TOKEN ? "env-ok" : "env-missing"}">
+      <span>${TELEGRAM_BOT_TOKEN ? "✓" : "○"}</span>
+      <span class="env-var">TELEGRAM_BOT_TOKEN</span>
+      <span class="env-hint">— from <a href="https://t.me/BotFather" target="_blank" style="color:#ff6b35">@BotFather</a></span>
+    </li>
+    <li class="${DISCORD_BOT_TOKEN ? "env-ok" : "env-missing"}">
+      <span>${DISCORD_BOT_TOKEN ? "✓" : "○"}</span>
+      <span class="env-var">DISCORD_BOT_TOKEN</span>
+      <span class="env-hint">— from <a href="https://discord.com/developers/applications" target="_blank" style="color:#ff6b35">Discord Dev Portal</a></span>
+    </li>
+  </ul>
+</div>
+
+<!-- Advanced -->
+<div class="card">
+  <details>
+    <summary>▸ Advanced: Edit openclaw.json directly</summary>
+    <form method="POST" action="/setup">
+      <label for="config">openclaw.json — <a href="https://docs.openclaw.ai/gateway/configuration" target="_blank" style="color:#ff6b35">config reference ↗</a></label>
+      <textarea name="config" id="config">${configStr}</textarea>
+      <div class="hint">Saved to /data/.openclaw/openclaw.json — persists across restarts and redeploys.</div>
+      <button type="submit" class="btn btn-outline" style="margin-top:1rem">Save Raw Config</button>
+    </form>
+  </details>
+</div>
+
+</body></html>`;
 }
 
 // ─── HTTP server ──────────────────────────────────────────────────────────────
@@ -478,6 +598,53 @@ const server = http.createServer((req, res) => {
       return;
     }
 
+    // Model selection — saves only model to config (keys stay in Railway env vars)
+    if (url === "/setup/model" && req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => (body += chunk));
+      req.on("end", () => {
+        try {
+          const params = new URLSearchParams(body);
+          const model = params.get("model") || "";
+
+          if (!model) {
+            const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+            res.writeHead(400, { "Content-Type": "text/html" });
+            res.end(setupPage(config, false, "Please select a model."));
+            return;
+          }
+
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+          config.agents = config.agents || {};
+          config.agents.defaults = config.agents.defaults || {};
+          config.agents.defaults.model = { primary: model };
+
+          // Apply security invariants
+          config.gateway = config.gateway || {};
+          config.gateway.bind = "loopback";
+          config.gateway.auth = config.gateway.auth || {};
+          config.gateway.auth.token = GATEWAY_TOKEN;
+          config.gateway.controlUi = config.gateway.controlUi || {};
+          config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+          if (!config.gateway.controlUi.allowedOrigins) {
+            config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
+          }
+
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+          console.log(`[setup] Model set to: ${model}`);
+
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(setupPage(config, true));
+        } catch (e) {
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+          res.writeHead(400, { "Content-Type": "text/html" });
+          res.end(setupPage(config, false, "Error: " + e.message));
+        }
+      });
+      return;
+    }
+
+    // Raw config save (advanced editor)
     if (req.method === "POST") {
       let body = "";
       req.on("data", chunk => (body += chunk));
