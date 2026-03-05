@@ -187,6 +187,11 @@ function patchConfig(reason) {
       delete config.agents.defaults.sandbox.scope;
       didMigrate = true;
     }
+    // Clean invalid keys that OpenClaw rejects
+    if (config.gateway?.auth?.allowInsecureAuth !== undefined) {
+      delete config.gateway.auth.allowInsecureAuth;
+      didMigrate = true;
+    }
 
     // FIX #8: dmPolicy "allowlist" with empty allowFrom is a fatal config error.
     // Switch to "pairing" when no IDs are configured — users can pair interactively
@@ -215,9 +220,6 @@ function patchConfig(reason) {
     config.gateway.bind = "loopback";
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = GATEWAY_TOKEN;
-    // Allow token auth over HTTP — the wrapper→gateway link is loopback HTTP,
-    // Railway terminates TLS at the edge (HTTPS → wrapper → HTTP → gateway)
-    config.gateway.auth.allowInsecureAuth = true;
     config.gateway.controlUi = config.gateway.controlUi || {};
     config.gateway.controlUi.allowedOrigins = PUBLIC_URL ? [PUBLIC_URL] : ["*"];
     // FIX #11: Disable device identity auth for the Control UI.
@@ -487,7 +489,6 @@ const server = http.createServer((req, res) => {
           parsed.gateway.bind = "loopback";
           parsed.gateway.auth = parsed.gateway.auth || {};
           parsed.gateway.auth.token = GATEWAY_TOKEN;
-          parsed.gateway.auth.allowInsecureAuth = true;
           parsed.gateway.controlUi = parsed.gateway.controlUi || {};
           parsed.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
           if (!parsed.gateway.controlUi.allowedOrigins) {
