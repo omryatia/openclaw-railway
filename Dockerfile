@@ -31,17 +31,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends tailscale \
     && rm -rf /var/lib/apt/lists/*
 
-# FIX #3: Copy the ENTIRE build output, not just dist + node_modules.
-# The old Dockerfile only copied dist/, node_modules/, and package.json.
-# OpenClaw may need additional files at runtime (UI assets, config schemas,
-# plugin manifests, etc.) that live outside dist/. The official Dockerfile
-# does `COPY --chown=node:node . .` for this reason.
+# Copy runtime files from the OpenClaw build.
+# The official Dockerfile does `COPY . .` — we're selective but thorough.
 WORKDIR /app/openclaw
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/node_modules ./node_modules
 COPY --from=builder /build/package.json ./package.json
-# Copy UI build output — needed for the Control UI served by the gateway
+# UI assets — needed for the Control UI served by the gateway
 COPY --from=builder /build/ui ./ui
+# Workspace templates (AGENTS.md, SOUL.md, etc.) — required for sessions
+COPY --from=builder /build/docs ./docs
+# Source files — some runtime paths resolve relative to source
+COPY --from=builder /build/src ./src
+
+# Verify critical files exist (fail build early if missing)
+RUN test -f docs/reference/templates/AGENTS.md \
+    || (echo "ERROR: docs/reference/templates/AGENTS.md missing from build" && exit 1)
 
 # Copy wrapper and config
 COPY wrapper/server.js /app/wrapper/server.js
