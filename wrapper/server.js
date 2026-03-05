@@ -1121,9 +1121,6 @@ server.on("upgrade", (req, socket, head) => {
     headers["host"] = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
 
     // FIX #10: Inject gateway token for WebSocket auth.
-    // The gateway checks WS auth via: query param ?token=, Authorization header,
-    // or Sec-WebSocket-Protocol — NOT via x-openclaw-token custom header.
-    // Append token as query parameter (most reliable for WS handshake).
     let wsUrl = req.url || "/";
     const separator = wsUrl.includes("?") ? "&" : "?";
     wsUrl += `${separator}token=${encodeURIComponent(GATEWAY_TOKEN)}`;
@@ -1135,6 +1132,22 @@ server.on("upgrade", (req, socket, head) => {
     );
     proxy.write(head);
     socket.pipe(proxy).pipe(socket);
+
+    // FIX #12: Send WebSocket ping frames to prevent idle timeout.
+    // Railway/Tailscale proxy kills idle WS connections after ~60s.
+    // WebSocket ping frame: 0x89 (fin + opcode 9), 0x00 (no mask, 0 length)
+    const pingInterval = setInterval(() => {
+      try {
+        if (!socket.destroyed && socket.writable) {
+          socket.write(Buffer.from([0x89, 0x00]));
+        } else {
+          clearInterval(pingInterval);
+        }
+      } catch { clearInterval(pingInterval); }
+    }, 25000); // every 25 seconds
+
+    socket.on("close", () => clearInterval(pingInterval));
+    proxy.on("close", () => clearInterval(pingInterval));
   });
   proxy.on("error", () => socket.destroy());
   socket.on("error", () => proxy.destroy());
