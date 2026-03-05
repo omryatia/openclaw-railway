@@ -446,6 +446,13 @@ button,.btn{display:inline-block;margin-top:1rem;padding:.65rem 1.4rem;border:no
 details{margin-top:1.5rem}
 details summary{cursor:pointer;color:#aaa;font-size:.9rem;padding:.5rem 0}
 details summary:hover{color:#ff6b35}
+.channel-summary{display:flex;align-items:center;gap:.6rem;padding:.6rem .8rem;background:#1a1a1a;border:1px solid #333;border-radius:6px;font-size:.9rem;list-style:none}
+.channel-summary::-webkit-details-marker{display:none}
+.channel-summary::before{content:"▸";color:#666;font-size:.8rem;transition:transform .2s}
+details[open]>.channel-summary::before{transform:rotate(90deg)}
+.ch-ok{color:#4caf50}.ch-missing{color:#666}
+.guide{padding:.8rem 1rem;margin-top:.3rem;background:#111;border-radius:0 0 6px 6px}
+.guide ol{color:#aaa;font-size:.85rem;line-height:1.9;padding-left:1.2rem;margin:.5rem 0}
 .actions{display:flex;gap:.8rem;margin-top:1.2rem;flex-wrap:wrap}
 .domain{color:#4caf50;font-size:.85rem;margin-top:.5rem}
 .status-row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem}
@@ -495,6 +502,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
       <li>Paste your API key as the value</li>
       <li>Railway will <strong>automatically redeploy</strong> — come back to this page after</li>
     </ol>
+    <a href="/setup" class="btn btn-primary" style="margin-top:1rem">🔄 I added my key — check again</a>
   </div>` : `
   <div class="hint">To change provider, update the environment variable in Railway → Variables.</div>`}
 </div>
@@ -530,22 +538,96 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   ` : `<p style="color:#666">Complete Step 1 first — add an API key in Railway Variables.</p>`}
 </div>
 
-<!-- Step 3: Channels (info) -->
+<!-- Step 3: Channels -->
 <div class="card">
   <h2><span class="step-num">3</span> Messaging Channels (optional)</h2>
-  <p style="color:#aaa;font-size:.9rem">Add these in Railway → Variables to enable chat channels:</p>
-  <ul class="env-list">
-    <li class="${TELEGRAM_BOT_TOKEN ? "env-ok" : "env-missing"}">
-      <span>${TELEGRAM_BOT_TOKEN ? "✓" : "○"}</span>
-      <span class="env-var">TELEGRAM_BOT_TOKEN</span>
-      <span class="env-hint">— from <a href="https://t.me/BotFather" target="_blank" style="color:#ff6b35">@BotFather</a></span>
-    </li>
-    <li class="${DISCORD_BOT_TOKEN ? "env-ok" : "env-missing"}">
-      <span>${DISCORD_BOT_TOKEN ? "✓" : "○"}</span>
-      <span class="env-var">DISCORD_BOT_TOKEN</span>
-      <span class="env-hint">— from <a href="https://discord.com/developers/applications" target="_blank" style="color:#ff6b35">Discord Dev Portal</a></span>
-    </li>
-  </ul>
+  <p style="color:#aaa;font-size:.9rem">Click a channel to see setup instructions. Add tokens in Railway → Variables.</p>
+
+  <details ${TELEGRAM_BOT_TOKEN ? "open" : ""} style="margin-top:.8rem">
+    <summary class="channel-summary">
+      <span class="${TELEGRAM_BOT_TOKEN ? "ch-ok" : "ch-missing"}">${TELEGRAM_BOT_TOKEN ? "✓" : "○"}</span>
+      <span class="env-var">Telegram</span>
+      ${TELEGRAM_BOT_TOKEN ? '<span class="badge ok">Connected</span>' : '<span class="badge warn">Not configured</span>'}
+    </summary>
+    <div class="guide">
+      ${TELEGRAM_BOT_TOKEN ? '<p class="saved" style="margin-top:.5rem">✓ Telegram bot token detected. Your bot is active.</p>' : `
+      <ol>
+        <li>Open Telegram and search for <a href="https://t.me/BotFather" target="_blank" style="color:#ff6b35">@BotFather</a></li>
+        <li>Send <code>/newbot</code> and follow the prompts to name your bot</li>
+        <li>BotFather will give you a token like: <code>123456789:AAH...</code></li>
+        <li>In Railway → Variables, add:<br>
+          <span class="env-var" style="margin-top:.3rem;display:inline-block">TELEGRAM_BOT_TOKEN</span> = <em style="color:#888">your token from BotFather</em></li>
+        <li>Railway will redeploy automatically</li>
+      </ol>
+      <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 I added the token — check again</a>`}
+    </div>
+  </details>
+
+  <details ${DISCORD_BOT_TOKEN ? "open" : ""} style="margin-top:.5rem">
+    <summary class="channel-summary">
+      <span class="${DISCORD_BOT_TOKEN ? "ch-ok" : "ch-missing"}">${DISCORD_BOT_TOKEN ? "✓" : "○"}</span>
+      <span class="env-var">Discord</span>
+      ${DISCORD_BOT_TOKEN ? '<span class="badge ok">Connected</span>' : '<span class="badge warn">Not configured</span>'}
+    </summary>
+    <div class="guide">
+      ${DISCORD_BOT_TOKEN ? '<p class="saved" style="margin-top:.5rem">✓ Discord bot token detected. Your bot is active.</p>' : `
+      <ol>
+        <li>Go to the <a href="https://discord.com/developers/applications" target="_blank" style="color:#ff6b35">Discord Developer Portal</a></li>
+        <li>Click <strong>New Application</strong> → give it a name → Create</li>
+        <li>Go to <strong>Bot</strong> tab → click <strong>Reset Token</strong> → copy the token</li>
+        <li>Under <strong>Privileged Gateway Intents</strong>, enable:<br>
+          ☑ Message Content Intent</li>
+        <li>Go to <strong>OAuth2 → URL Generator</strong>:<br>
+          Scopes: <code>bot</code>, <code>applications.commands</code><br>
+          Bot Permissions: <code>Send Messages</code>, <code>Read Message History</code>, <code>Attach Files</code></li>
+        <li>Copy the generated URL and open it to invite the bot to your server</li>
+        <li>In Railway → Variables, add:<br>
+          <span class="env-var" style="margin-top:.3rem;display:inline-block">DISCORD_BOT_TOKEN</span> = <em style="color:#888">your bot token</em></li>
+        <li>Railway will redeploy automatically</li>
+      </ol>
+      <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 I added the token — check again</a>`}
+    </div>
+  </details>
+
+  <details style="margin-top:.5rem">
+    <summary class="channel-summary">
+      <span class="ch-missing">○</span>
+      <span class="env-var">WhatsApp</span>
+      <span class="badge warn">Requires linking</span>
+    </summary>
+    <div class="guide">
+      <ol>
+        <li>WhatsApp connects via QR code after deploy — no env var needed</li>
+        <li>Open the <strong>Control UI</strong> → <strong>Channels</strong> tab</li>
+        <li>Click <strong>WhatsApp</strong> → scan the QR code with your phone</li>
+        <li>Keep your phone connected to the internet</li>
+      </ol>
+    </div>
+  </details>
+
+  <details style="margin-top:.5rem">
+    <summary class="channel-summary">
+      <span class="ch-missing">○</span>
+      <span class="env-var">Slack</span>
+      <span class="badge warn">Not configured</span>
+    </summary>
+    <div class="guide">
+      <ol>
+        <li>Go to <a href="https://api.slack.com/apps" target="_blank" style="color:#ff6b35">api.slack.com/apps</a> → <strong>Create New App</strong></li>
+        <li>Choose <strong>From scratch</strong> → name it → select your workspace</li>
+        <li>Go to <strong>Socket Mode</strong> → enable it → create an App-Level Token with <code>connections:write</code> scope</li>
+        <li>Go to <strong>OAuth & Permissions</strong> → add Bot Token Scopes:<br>
+          <code>chat:write</code>, <code>im:history</code>, <code>im:read</code>, <code>im:write</code></li>
+        <li>Go to <strong>Event Subscriptions</strong> → enable → subscribe to:<br>
+          <code>message.im</code></li>
+        <li><strong>Install to Workspace</strong> and copy the Bot User OAuth Token</li>
+        <li>In Railway → Variables, add both:<br>
+          <span class="env-var">SLACK_BOT_TOKEN</span> = <em style="color:#888">xoxb-your-bot-token</em><br>
+          <span class="env-var">SLACK_APP_TOKEN</span> = <em style="color:#888">xapp-your-app-token</em></li>
+      </ol>
+      <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 Check again</a>
+    </div>
+  </details>
 </div>
 
 <!-- Advanced -->
