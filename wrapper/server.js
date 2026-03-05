@@ -210,6 +210,17 @@ function patchConfig(reason) {
       }
     }
 
+    // Set conservative tool policy defaults if none configured
+    if (!config.tools) {
+      config.tools = {
+        allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
+        deny: ["exec"],
+        elevated: { enabled: false }
+      };
+      didMigrate = true;
+      console.log("[config] Set default tool policy (exec disabled, safe tools only)");
+    }
+
     // Check if security patch is actually needed before writing
     const origins = config.gateway?.controlUi?.allowedOrigins || [];
     const expectedOrigin = PUBLIC_URL || "*";
@@ -455,6 +466,10 @@ details[open]>.channel-summary::before{transform:rotate(90deg)}
 .ch-ok{color:#4caf50}.ch-missing{color:#666}
 .guide{padding:.8rem 1rem;margin-top:.3rem;background:#111;border-radius:0 0 6px 6px}
 .guide ol{color:#aaa;font-size:.85rem;line-height:1.9;padding-left:1.2rem;margin:.5rem 0}
+.tool-grid{display:flex;flex-direction:column;gap:.3rem;margin:.3rem 0}
+.tool-check{display:flex;align-items:center;gap:.5rem;color:#aaa;font-size:.88rem;cursor:pointer;padding:.3rem .4rem;border-radius:4px}
+.tool-check:hover{background:#1a1a1a}
+.tool-check input{cursor:pointer;width:1rem;height:1rem;accent-color:#ff6b35}
 .actions{display:flex;gap:.8rem;margin-top:1.2rem;flex-wrap:wrap}
 .domain{color:#4caf50;font-size:.85rem;margin-top:.5rem}
 .status-row{display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem}
@@ -541,9 +556,52 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   ` : `<p style="color:#666">Complete Step 1 first — add an API key in Railway Variables.</p>`}
 </div>
 
-<!-- Step 3: Channels -->
+<!-- Step 3: Tool Policy -->
 <div class="card">
-  <h2><span class="step-num">3</span> Messaging Channels (optional)</h2>
+  <h2><span class="step-num ${config.tools ? "step-done" : ""}">3</span> Tool Security Policy</h2>
+  <p style="color:#aaa;font-size:.9rem">
+    Control what your AI agent can do. Start conservative — you can always enable more later.
+  </p>
+
+  <form method="POST" action="/setup/tools">
+    <div style="margin-top:.8rem">
+      <label style="margin-top:0">Safe Tools (always recommended)</label>
+      <div class="tool-grid">
+        <label class="tool-check"><input type="checkbox" name="tools" value="read" ${(config.tools?.allow || []).includes("read") || !config.tools ? "checked" : ""}> <code>read</code> — Read files</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="write" ${(config.tools?.allow || []).includes("write") || !config.tools ? "checked" : ""}> <code>write</code> — Write files</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="edit" ${(config.tools?.allow || []).includes("edit") || !config.tools ? "checked" : ""}> <code>edit</code> — Edit files</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="apply_patch" ${(config.tools?.allow || []).includes("apply_patch") || !config.tools ? "checked" : ""}> <code>apply_patch</code> — Apply code patches</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="web_search" ${(config.tools?.allow || []).includes("web_search") || !config.tools ? "checked" : ""}> <code>web_search</code> — Search the web</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="web_fetch" ${(config.tools?.allow || []).includes("web_fetch") || !config.tools ? "checked" : ""}> <code>web_fetch</code> — Fetch web pages</label>
+      </div>
+
+      <label>Communication Tools</label>
+      <div class="tool-grid">
+        <label class="tool-check"><input type="checkbox" name="tools" value="sessions_list" ${(config.tools?.allow || []).includes("sessions_list") ? "checked" : ""}> <code>sessions_list</code> — List sessions</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="sessions_history" ${(config.tools?.allow || []).includes("sessions_history") ? "checked" : ""}> <code>sessions_history</code> — View session history</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="sessions_send" ${(config.tools?.allow || []).includes("sessions_send") ? "checked" : ""}> <code>sessions_send</code> — Send to other sessions</label>
+        <label class="tool-check"><input type="checkbox" name="tools" value="memory" ${(config.tools?.allow || []).includes("memory") ? "checked" : ""}> <code>memory</code> — Long-term memory</label>
+      </div>
+
+      <label>⚠ Dangerous Tools</label>
+      <div style="padding:.6rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
+        <label class="tool-check" style="color:#ff9800"><input type="checkbox" name="tools" value="exec" ${(config.tools?.allow || []).includes("exec") ? "checked" : ""}> <code>exec</code> — Run shell commands <strong>(can execute anything!)</strong></label>
+        <label class="tool-check" style="color:#ff9800;margin-top:.4rem"><input type="checkbox" name="tools" value="browser" ${(config.tools?.allow || []).includes("browser") ? "checked" : ""}> <code>browser</code> — Browser automation</label>
+        <div class="hint" style="margin-top:.5rem;color:#f44336">
+          ⚠ <code>exec</code> gives the agent full shell access inside the container.
+          It can install packages, modify files, and run arbitrary commands.
+          Only enable if you understand the risks.
+        </div>
+      </div>
+    </div>
+
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem">Save Tool Policy</button>
+  </form>
+</div>
+
+<!-- Step 4: Channels -->
+<div class="card">
+  <h2><span class="step-num">4</span> Messaging Channels (optional)</h2>
   <p style="color:#aaa;font-size:.9rem">Click a channel to see setup instructions. Add tokens in Railway → Variables.</p>
 
   <details ${TELEGRAM_BOT_TOKEN ? "open" : ""} style="margin-top:.8rem">
@@ -633,20 +691,33 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   </details>
 </div>
 
-<!-- Step 4: Tailscale (Security) -->
+<!-- Step 5: Tailscale (Security) -->
 <div class="card">
-  <h2><span class="step-num ${TAILSCALE_AUTH_KEY ? "step-done" : ""}">4</span> Private Network with Tailscale (recommended)</h2>
+  <h2><span class="step-num ${TAILSCALE_AUTH_KEY ? "step-done" : ""}">5</span> Private Network with Tailscale (recommended)</h2>
   <p style="color:#aaa;font-size:.9rem">
     Tailscale takes your OpenClaw <strong>off the public internet</strong>. Only devices on your private tailnet can reach it.
   </p>
 
   ${TAILSCALE_AUTH_KEY ? `
   <div style="padding:.8rem 1rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px;margin-top:.8rem">
-    <p class="saved" style="margin:0">✓ Tailscale configured. Your instance is accessible via your tailnet.</p>
+    <p class="saved" style="margin:0">✓ Tailscale auth key configured.</p>
     <p style="color:#aaa;font-size:.85rem;margin:.5rem 0 0">
-      Access via: <code>https://openclaw-railway.your-tailnet.ts.net</code><br>
-      You can now disable public networking in Railway to make this fully private.
+      Access via: <code>https://openclaw-railway.&lt;your-tailnet&gt;.ts.net</code><br>
+      Find your tailnet name at <a href="https://login.tailscale.com/admin/dns" target="_blank" style="color:#ff6b35">Tailscale Admin → DNS</a><br>
+      <strong>Important:</strong> Your browser device must also be on the same tailnet (Tailscale installed & connected).
     </p>
+    <details style="margin-top:.6rem">
+      <summary style="color:#aaa;cursor:pointer;font-size:.85rem">Not working? Troubleshoot</summary>
+      <div class="guide" style="background:#0f1f0f">
+        <ol style="font-size:.83rem">
+          <li>Check <a href="https://login.tailscale.com/admin/machines" target="_blank" style="color:#ff6b35">Tailscale Admin → Machines</a> — is <code>openclaw-railway</code> listed and online?</li>
+          <li>Is Tailscale running on the device you're browsing from?</li>
+          <li>Is <a href="https://login.tailscale.com/admin/dns" target="_blank" style="color:#ff6b35">MagicDNS</a> enabled in your tailnet?</li>
+          <li>Try the IP directly: check deploy logs for <code>[entrypoint] Tailscale up — IP: 100.x.x.x</code></li>
+          <li>After disabling Railway public networking, the container needs to be able to serve via Tailscale — check deploy logs for <code>tailscale serve</code> output</li>
+        </ol>
+      </div>
+    </details>
   </div>
   ` : `
   <div style="margin-top:.8rem;padding:.8rem 1rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
@@ -689,9 +760,6 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   <h2>🔒 Security Status</h2>
   <ul class="env-list">
     <li class="env-ok">
-      <span>✓</span><span>Gateway bound to <strong>loopback only</strong> — not directly reachable</span>
-    </li>
-    <li class="env-ok">
       <span>✓</span><span>Token auth — 64-char random, auto-generated</span>
     </li>
     <li class="env-ok">
@@ -709,9 +777,24 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <li class="env-ok">
       <span>✓</span><span>API keys in Railway env vars — never written to config file</span>
     </li>
+    <li class="env-ok">
+      <span>✓</span><span>Gateway bound to <strong>127.0.0.1</strong> (loopback) — enforced, cannot be changed via UI</span>
+    </li>
+    <li class="${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "env-ok" : "env-missing"}">
+      <span>${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") ? "✓" : "⚠"}</span>
+      <span>${config.tools?.deny?.includes("exec") || !config.tools?.allow?.includes("exec") 
+        ? "Shell exec <strong>disabled</strong> — agent cannot run arbitrary commands" 
+        : "<code>exec</code> is <strong>enabled</strong> — agent can run shell commands (see Step 3)"}</span>
+    </li>
+    <li class="${config.tools?.allow ? "env-ok" : "env-missing"}">
+      <span>${config.tools?.allow ? "✓" : "⚠"}</span>
+      <span>${config.tools?.allow 
+        ? `Tool allowlist active — ${config.tools.allow.length} tools enabled (see Step 3)` 
+        : "No tool policy — all tools enabled by default (configure in Step 3)"}</span>
+    </li>
     <li class="${TAILSCALE_AUTH_KEY ? "env-ok" : "env-missing"}">
       <span>${TAILSCALE_AUTH_KEY ? "✓" : "✗"}</span>
-      <span>${TAILSCALE_AUTH_KEY ? "Tailscale — private network, off public internet" : "No Tailscale — instance is on the <strong>public internet</strong> (see Step 4)"}</span>
+      <span>${TAILSCALE_AUTH_KEY ? "Tailscale — private network, off public internet" : "No Tailscale — instance is on the <strong>public internet</strong> (see Step 5)"}</span>
     </li>
     <li class="env-missing">
       <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
@@ -803,6 +886,53 @@ const server = http.createServer((req, res) => {
 
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Model set to: ${model}`);
+
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(setupPage(config, true));
+        } catch (e) {
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+          res.writeHead(400, { "Content-Type": "text/html" });
+          res.end(setupPage(config, false, "Error: " + e.message));
+        }
+      });
+      return;
+    }
+
+    // Tool policy save
+    if (url === "/setup/tools" && req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => (body += chunk));
+      req.on("end", () => {
+        try {
+          const params = new URLSearchParams(body);
+          const selectedTools = params.getAll("tools");
+
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+
+          // Build tool policy
+          config.tools = config.tools || {};
+          config.tools.allow = selectedTools.length > 0 ? selectedTools : ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"];
+
+          // If exec is not in the allowed list, explicitly deny it
+          if (!selectedTools.includes("exec")) {
+            config.tools.deny = ["exec"];
+            config.tools.elevated = { enabled: false };
+          } else {
+            // exec enabled — remove from deny, enable elevated with approval
+            config.tools.deny = [];
+            config.tools.elevated = { enabled: true, elevatedDefault: "off" };
+          }
+
+          // Apply security invariants
+          config.gateway = config.gateway || {};
+          config.gateway.bind = "loopback";
+          config.gateway.auth = config.gateway.auth || {};
+          config.gateway.auth.token = GATEWAY_TOKEN;
+          config.gateway.controlUi = config.gateway.controlUi || {};
+          config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+          console.log(`[setup] Tool policy: allow=[${selectedTools.join(",")}], exec=${selectedTools.includes("exec") ? "ON" : "OFF"}`);
 
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(config, true));
