@@ -42,6 +42,16 @@
           "name": "DISCORD_BOT_TOKEN",
           "description": "Discord bot token. Optional — enables Discord channel.",
           "required": false
+        },
+        {
+          "name": "SLACK_BOT_TOKEN",
+          "description": "Slack Bot User OAuth Token (xoxb-...). Optional — enables Slack channel.",
+          "required": false
+        },
+        {
+          "name": "SLACK_APP_TOKEN",
+          "description": "Slack App-Level Token (xapp-...). Required with SLACK_BOT_TOKEN for Socket Mode.",
+          "required": false
         }
       ],
       "volumes": [
