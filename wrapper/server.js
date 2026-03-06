@@ -511,7 +511,11 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
   </div>
   ${PUBLIC_URL ? `<div class="domain">🌐 ${PUBLIC_URL}</div>` : ""}
   ${PRIVATE_DOMAIN ? `<div class="domain">🔒 http://${PRIVATE_DOMAIN}:${PORT}</div>` : ""}
-  ${gatewayReady ? `<div class="actions"><a href="/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
+  ${gatewayReady && PUBLIC_URL ? `<div class="actions"><a href="${PUBLIC_URL}/?token=${encodeURIComponent(GATEWAY_TOKEN)}" target="_blank" class="btn btn-success">Open Control UI ↗</a></div>` : ""}
+  ${gatewayReady && !PUBLIC_URL ? `<div style="margin-top:.8rem;padding:.6rem .8rem;background:#1a1a2a;border:1px solid #2a2a4a;border-radius:6px;font-size:.85rem;color:#aaa">
+    💬 <strong>Chat via your messaging channels</strong> (Telegram, Discord, WhatsApp) — no public URL needed.<br>
+    The Control UI requires public networking (HTTPS/WSS). This setup page works fine over the private network.
+  </div>` : ""}
 </div>
 
 <!-- Step 1: API Key -->
@@ -722,24 +726,33 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
 
 <!-- Step 5: Private Access with Tailscale -->
 <div class="card">
-  <h2><span class="step-num">5</span> Private Network with Tailscale (recommended)</h2>
+  <h2><span class="step-num">5</span> Private Network with Tailscale</h2>
   <p style="color:#aaa;font-size:.9rem">
-    Take OpenClaw <strong>off the public internet</strong>. Only devices on your private Tailscale network (tailnet) can reach it.
+    Remove OpenClaw from the public internet. Access this setup page via Tailscale, chat via your messaging channels.
   </p>
 
   ${PUBLIC_URL ? `
   <div style="margin-top:.8rem;padding:.8rem 1rem;background:#2a1a1a;border:1px solid #4a2a2a;border-radius:6px">
-    <p style="color:#ff9800;margin:0 0 .3rem;font-size:.9rem">⚠ Currently your OpenClaw is on the public internet</p>
+    <p style="color:#ff9800;margin:0 0 .3rem;font-size:.9rem">⚠ Public networking is enabled</p>
     <p style="color:#888;font-size:.85rem;margin:0">
-      The URL is obscure and auth-gated, but anyone who finds it can attempt to connect.
+      After setting up Tailscale and verifying your channels work, you can disable public networking.
     </p>
   </div>` : `
   <div style="margin-top:.8rem;padding:.8rem 1rem;background:#1a2a1a;border:1px solid #2a4a2a;border-radius:6px">
     <p style="color:#4caf50;margin:0 0 .3rem;font-size:.9rem">✓ Public networking disabled — OpenClaw is private</p>
     <p style="color:#888;font-size:.85rem;margin:0">
-      Only accessible via Railway's private network through your Tailscale tailnet.
+      This setup page is accessible via Tailscale. Chat happens through your messaging channels (Telegram, Discord, etc.)
     </p>
   </div>`}
+
+  <div style="margin-top:.8rem;padding:.6rem .8rem;background:#1a1a2a;border:1px solid #2a2a4a;border-radius:6px">
+    <p style="color:#aaa;font-size:.85rem;margin:0"><strong>How it works when private:</strong></p>
+    <ul style="color:#888;font-size:.83rem;margin:.3rem 0 0;padding-left:1.2rem;line-height:1.7">
+      <li><strong>This setup page</strong> — accessible via Tailscale (HTTP, works fine)</li>
+      <li><strong>Chat</strong> — via Telegram, Discord, WhatsApp, Slack (gateway connects outbound, no public URL needed)</li>
+      <li><strong>Control UI</strong> — requires public networking for WebSocket. Re-enable public domain if you need it.</li>
+    </ul>
+  </div>
 
   <details style="margin-top:.8rem">
     <summary class="channel-summary">
@@ -850,8 +863,8 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     <li class="${PUBLIC_URL ? "env-missing" : "env-ok"}">
       <span>${PUBLIC_URL ? "⚠" : "✓"}</span>
       <span>${PUBLIC_URL 
-        ? `Public internet access — deploy a <a href="https://docs.railway.com/guides/set-up-a-tailscale-subnet-router" target="_blank" style="color:#ff6b35">Tailscale Subnet Router</a> then disable public networking (Step 5)` 
-        : "Private network only — not accessible from the public internet"}</span>
+        ? `Public networking enabled — setup Tailscale then disable it (Step 5)` 
+        : "Private network only — setup page via Tailscale, chat via messaging channels"}</span>
     </li>
     <li class="env-missing">
       <span>⚠</span><span><code>dangerouslyDisableDeviceAuth</code> — required for Railway proxy setup (<a href="https://github.com/openclaw/openclaw/issues/29908" target="_blank" style="color:#ff6b35">upstream bug</a>)</span>
