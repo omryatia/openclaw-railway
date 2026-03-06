@@ -58,6 +58,8 @@ const OPENROUTER_API_KEY  = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY      = process.env.OPENAI_API_KEY || "";
 const TELEGRAM_BOT_TOKEN  = process.env.TELEGRAM_BOT_TOKEN || "";
 const DISCORD_BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN || "";
+const SLACK_BOT_TOKEN     = process.env.SLACK_BOT_TOKEN || "";
+const SLACK_APP_TOKEN     = process.env.SLACK_APP_TOKEN || "";
 
 // Railway provides this automatically — use it for dynamic origin allowlist
 const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
@@ -70,6 +72,54 @@ function buildAllowedOrigins() {
   if (PUBLIC_URL) origins.push(PUBLIC_URL);
   if (PRIVATE_DOMAIN) origins.push(`http://${PRIVATE_DOMAIN}:${PORT}`);
   return origins.length > 0 ? origins : ["*"];
+}
+
+// Sync channel tokens from Railway env vars into the config object.
+// OpenClaw reads channel tokens from openclaw.json, not env vars.
+// This ensures tokens added via Railway Variables are always in the config.
+function syncChannelTokens(config) {
+  let changed = false;
+  config.channels = config.channels || {};
+
+  if (TELEGRAM_BOT_TOKEN) {
+    config.channels.telegram = config.channels.telegram || {};
+    if (config.channels.telegram.botToken !== TELEGRAM_BOT_TOKEN) {
+      config.channels.telegram.botToken = TELEGRAM_BOT_TOKEN;
+      config.channels.telegram.enabled = true;
+      if (!config.channels.telegram.dmPolicy) config.channels.telegram.dmPolicy = "pairing";
+      changed = true;
+    }
+  }
+
+  if (DISCORD_BOT_TOKEN) {
+    config.channels.discord = config.channels.discord || {};
+    if (config.channels.discord.token !== DISCORD_BOT_TOKEN) {
+      config.channels.discord.token = DISCORD_BOT_TOKEN;
+      config.channels.discord.enabled = true;
+      if (!config.channels.discord.dmPolicy) config.channels.discord.dmPolicy = "pairing";
+      changed = true;
+    }
+  }
+
+  if (SLACK_BOT_TOKEN) {
+    config.channels.slack = config.channels.slack || {};
+    if (config.channels.slack.botToken !== SLACK_BOT_TOKEN) {
+      config.channels.slack.botToken = SLACK_BOT_TOKEN;
+      config.channels.slack.enabled = true;
+      if (!config.channels.slack.dmPolicy) config.channels.slack.dmPolicy = "pairing";
+      changed = true;
+    }
+  }
+  if (SLACK_APP_TOKEN) {
+    config.channels.slack = config.channels.slack || {};
+    if (config.channels.slack.appToken !== SLACK_APP_TOKEN) {
+      config.channels.slack.appToken = SLACK_APP_TOKEN;
+      changed = true;
+    }
+  }
+
+  if (changed) console.log("[config] Synced channel tokens from env vars into config");
+  return changed;
 }
 
 // FIX #2 (CRITICAL): Strip proxy headers before forwarding to gateway.
@@ -229,6 +279,9 @@ function patchConfig(reason) {
       console.log("[config] Set default tool policy (exec disabled, safe tools only)");
     }
 
+    // Sync channel tokens from Railway env vars into config
+    if (syncChannelTokens(config)) didMigrate = true;
+
     // Clean stale tailscale config from previous versions that incorrectly
     // wrote gateway.tailscale.* keys. These are not valid OpenClaw config keys.
     if (config.gateway?.tailscale) {
@@ -359,6 +412,8 @@ function startGateway() {
     ...(OPENAI_API_KEY && { OPENAI_API_KEY }),
     ...(TELEGRAM_BOT_TOKEN && { TELEGRAM_BOT_TOKEN }),
     ...(DISCORD_BOT_TOKEN && { DISCORD_BOT_TOKEN }),
+    ...(SLACK_BOT_TOKEN && { SLACK_BOT_TOKEN }),
+    ...(SLACK_APP_TOKEN && { SLACK_APP_TOKEN }),
   };
 
   gatewayProcess = spawn("node", [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT), "--allow-unconfigured"], {
@@ -699,13 +754,14 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
     </div>
   </details>
 
-  <details style="margin-top:.5rem">
+  <details ${SLACK_BOT_TOKEN ? "open" : ""} style="margin-top:.5rem">
     <summary class="channel-summary">
-      <span class="ch-missing">○</span>
+      <span class="${SLACK_BOT_TOKEN ? "ch-ok" : "ch-missing"}">${SLACK_BOT_TOKEN ? "✓" : "○"}</span>
       <span class="env-var">Slack</span>
-      <span class="badge warn">Not configured</span>
+      ${SLACK_BOT_TOKEN ? '<span class="badge ok">Connected</span>' : '<span class="badge warn">Not configured</span>'}
     </summary>
     <div class="guide">
+      ${SLACK_BOT_TOKEN ? '<p class="saved" style="margin-top:.5rem">✓ Slack tokens detected. Your bot is active.</p>' : `
       <ol>
         <li>Go to <a href="https://api.slack.com/apps" target="_blank" style="color:#ff6b35">api.slack.com/apps</a> → <strong>Create New App</strong></li>
         <li>Choose <strong>From scratch</strong> → name it → select your workspace</li>
@@ -719,7 +775,7 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
           <span class="env-var">SLACK_BOT_TOKEN</span> = <em style="color:#888">xoxb-your-bot-token</em><br>
           <span class="env-var">SLACK_APP_TOKEN</span> = <em style="color:#888">xapp-your-app-token</em></li>
       </ol>
-      <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 Check again</a>
+      <a href="/setup" class="btn btn-outline" style="margin-top:.5rem;font-size:.85rem">🔄 Check again</a>`}
     </div>
   </details>
 </div>
@@ -968,6 +1024,7 @@ const server = http.createServer((req, res) => {
             config.gateway.controlUi.allowedOrigins = buildAllowedOrigins();
           }
 
+          syncChannelTokens(config);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Model set to: ${model}`);
 
@@ -1028,6 +1085,7 @@ const server = http.createServer((req, res) => {
           config.gateway.controlUi = config.gateway.controlUi || {};
           config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
 
+          syncChannelTokens(config);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Tool policy: allow=[${selectedTools.join(",")}], exec=${selectedTools.includes("exec") ? (execApproval ? "ON+approval" : "ON+no-approval") : "OFF"}`);
 
@@ -1064,6 +1122,7 @@ const server = http.createServer((req, res) => {
           parsed.agents.defaults.sandbox = parsed.agents.defaults.sandbox || {};
           if (!parsed.agents.defaults.sandbox.mode) parsed.agents.defaults.sandbox.mode = "non-main";
 
+          syncChannelTokens(parsed);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(parsed, null, 2), { mode: 0o600 });
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(parsed, true));
