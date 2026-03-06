@@ -699,7 +699,43 @@ code{background:#1a1a1a;padding:.15rem .4rem;border-radius:3px;font-size:.85rem;
       ${TELEGRAM_BOT_TOKEN ? '<span class="badge ok">Connected</span>' : '<span class="badge warn">Not configured</span>'}
     </summary>
     <div class="guide">
-      ${TELEGRAM_BOT_TOKEN ? '<p class="saved" style="margin-top:.5rem">✓ Telegram bot token detected. Your bot is active.</p>' : `
+      ${TELEGRAM_BOT_TOKEN ? `
+      <p class="saved" style="margin-top:.5rem">✓ Telegram bot token detected.</p>
+
+      <div style="margin-top:.8rem;padding:.8rem;background:#1a1a1a;border:1px solid #333;border-radius:6px">
+        <p style="color:#ff6b35;font-weight:600;font-size:.9rem;margin:0 0 .5rem">Pair your account</p>
+        <ol style="font-size:.85rem;color:#aaa;line-height:1.8;margin:0;padding-left:1.2rem">
+          <li>Open Telegram and <strong>send any message</strong> to your bot</li>
+          <li>The bot will respond: <em>"pairing required"</em> — this is expected</li>
+          <li>Find your Telegram user ID:
+            <ul style="margin:.2rem 0;padding-left:1rem">
+              <li>Message <a href="https://t.me/userinfobot" target="_blank" style="color:#ff6b35">@userinfobot</a> on Telegram — it replies with your numeric ID</li>
+              <li>Or check the deploy logs for <code>from.id</code> after messaging the bot</li>
+            </ul>
+          </li>
+          <li>Enter your user ID below and click <strong>Add</strong></li>
+        </ol>
+
+        <form method="POST" action="/setup/allowfrom" style="margin-top:.6rem;display:flex;gap:.5rem;align-items:flex-end">
+          <input type="hidden" name="channel" value="telegram">
+          <div style="flex:1">
+            <label style="margin:0;font-size:.8rem">Telegram User ID</label>
+            <input type="text" name="sender_id" placeholder="e.g. 123456789" style="width:100%;padding:.5rem .6rem;background:#111;border:1px solid #333;border-radius:4px;color:#e0e0e0;font-size:.9rem">
+          </div>
+          <button type="submit" class="btn btn-primary" style="margin:0;padding:.5rem 1rem;font-size:.85rem">Add</button>
+        </form>
+
+        ${(() => {
+          const ids = config.channels?.telegram?.allowFrom || [];
+          return ids.length > 0 ? `
+          <div style="margin-top:.5rem">
+            <span style="color:#888;font-size:.8rem">Approved IDs:</span>
+            ${ids.map(id => `<code style="margin-left:.4rem">${id}</code>`).join("")}
+          </div>` : `
+          <div style="margin-top:.5rem;color:#888;font-size:.8rem">No approved IDs yet. Add your user ID above.</div>`;
+        })()}
+      </div>
+      ` : `
       <ol>
         <li>Open Telegram and search for <a href="https://t.me/BotFather" target="_blank" style="color:#ff6b35">@BotFather</a></li>
         <li>Send <code>/newbot</code> and follow the prompts to name your bot</li>
@@ -989,6 +1025,68 @@ const server = http.createServer((req, res) => {
     if (!checkSetupAuth(req)) {
       res.writeHead(401, { "WWW-Authenticate": 'Basic realm="OpenClaw Setup"', "Content-Type": "text/plain" });
       res.end("Authentication required — use any username and your SETUP_PASSWORD");
+      return;
+    }
+
+    // Channel allowFrom — adds a sender ID to a channel's allowFrom list
+    if (url === "/setup/allowfrom" && req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => (body += chunk));
+      req.on("end", () => {
+        try {
+          const params = new URLSearchParams(body);
+          const channel = params.get("channel") || "";
+          const senderId = (params.get("sender_id") || "").trim();
+
+          if (!channel || !senderId) {
+            const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+            res.writeHead(400, { "Content-Type": "text/html" });
+            res.end(setupPage(config, false, "Please enter a sender ID."));
+            return;
+          }
+
+          // Validate: must be numeric (Telegram user IDs are numbers)
+          if (!/^\d+$/.test(senderId)) {
+            const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+            res.writeHead(400, { "Content-Type": "text/html" });
+            res.end(setupPage(config, false, "Sender ID must be numeric (e.g. 123456789). Use @userinfobot on Telegram to find yours."));
+            return;
+          }
+
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+          config.channels = config.channels || {};
+          config.channels[channel] = config.channels[channel] || {};
+
+          // Add to allowFrom if not already present
+          const allowFrom = config.channels[channel].allowFrom || [];
+          if (!allowFrom.includes(senderId) && !allowFrom.includes(Number(senderId))) {
+            allowFrom.push(senderId);
+            config.channels[channel].allowFrom = allowFrom;
+          }
+
+          // If dmPolicy was "pairing" and we now have IDs, switch to allowlist
+          if (config.channels[channel].dmPolicy === "pairing" && allowFrom.length > 0) {
+            config.channels[channel].dmPolicy = "allowlist";
+          }
+
+          // Apply security invariants
+          config.gateway = config.gateway || {};
+          config.gateway.bind = "loopback";
+          config.gateway.auth = config.gateway.auth || {};
+          config.gateway.auth.token = GATEWAY_TOKEN;
+
+          syncChannelTokens(config);
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+          console.log(`[setup] Added ${channel} allowFrom: ${senderId}`);
+
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(setupPage(config, true));
+        } catch (e) {
+          const config = fs.existsSync(CONFIG_PATH) ? JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) : {};
+          res.writeHead(400, { "Content-Type": "text/html" });
+          res.end(setupPage(config, false, "Error: " + e.message));
+        }
+      });
       return;
     }
 
