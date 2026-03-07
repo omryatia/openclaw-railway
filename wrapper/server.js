@@ -297,6 +297,7 @@ function patchConfig(reason) {
     const currentOrigins = JSON.stringify(config.gateway?.controlUi?.allowedOrigins || []);
     const expectedOrigins = JSON.stringify(buildAllowedOrigins());
     const alreadyPatched =
+      config.gateway?.mode === "local" &&
       config.gateway?.bind === "loopback" &&
       config.gateway?.auth?.token === GATEWAY_TOKEN &&
       config.gateway?.trustedProxies?.includes("127.0.0.1") &&
@@ -305,6 +306,7 @@ function patchConfig(reason) {
     if (alreadyPatched && !didMigrate) return false;
 
     config.gateway = config.gateway || {};
+    config.gateway.mode = "local";
     config.gateway.bind = "loopback";
     config.gateway.auth = config.gateway.auth || {};
     config.gateway.auth.token = GATEWAY_TOKEN;
@@ -407,9 +409,6 @@ function startGateway() {
   console.log(`[gateway] Starting (attempt ${restartCount + 1})...`);
 
   const args = [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT)];
-  if (isFirstRun()) {
-    args.push("--allow-unconfigured");
-  }
 
   const child = spawn("node", args, {
     env: gatewayEnv(), stdio: ["ignore", "inherit", "inherit"],
@@ -1134,6 +1133,7 @@ const server = http.createServer((req, res) => {
 
           // Apply security invariants
           config.gateway = config.gateway || {};
+          config.gateway.mode = "local";
           config.gateway.bind = "loopback";
           config.gateway.auth = config.gateway.auth || {};
           config.gateway.auth.token = GATEWAY_TOKEN;
@@ -1177,6 +1177,7 @@ const server = http.createServer((req, res) => {
 
           // Apply security invariants
           config.gateway = config.gateway || {};
+          config.gateway.mode = "local";
           config.gateway.bind = "loopback";
           config.gateway.auth = config.gateway.auth || {};
           config.gateway.auth.token = GATEWAY_TOKEN;
@@ -1242,6 +1243,7 @@ const server = http.createServer((req, res) => {
 
           // Apply security invariants
           config.gateway = config.gateway || {};
+          config.gateway.mode = "local";
           config.gateway.bind = "loopback";
           config.gateway.auth = config.gateway.auth || {};
           config.gateway.auth.token = GATEWAY_TOKEN;
@@ -1272,6 +1274,7 @@ const server = http.createServer((req, res) => {
           const parsed = JSON.parse(new URLSearchParams(body).get("config"));
           // Enforce security invariants — cannot be overridden via UI
           parsed.gateway = parsed.gateway || {};
+          parsed.gateway.mode = "local";
           parsed.gateway.bind = "loopback";
           parsed.gateway.auth = parsed.gateway.auth || {};
           parsed.gateway.auth.token = GATEWAY_TOKEN;
