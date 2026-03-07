@@ -83,30 +83,48 @@ function syncChannelTokens(config) {
 
   if (TELEGRAM_BOT_TOKEN) {
     config.channels.telegram = config.channels.telegram || {};
+    if (!config.channels.telegram.enabled) {
+      config.channels.telegram.enabled = true;
+      changed = true;
+    }
+    if (!config.channels.telegram.dmPolicy) {
+      config.channels.telegram.dmPolicy = "pairing";
+      changed = true;
+    }
     if (config.channels.telegram.botToken !== TELEGRAM_BOT_TOKEN) {
       config.channels.telegram.botToken = TELEGRAM_BOT_TOKEN;
-      config.channels.telegram.enabled = true;
-      if (!config.channels.telegram.dmPolicy) config.channels.telegram.dmPolicy = "pairing";
       changed = true;
     }
   }
 
   if (DISCORD_BOT_TOKEN) {
     config.channels.discord = config.channels.discord || {};
+    if (!config.channels.discord.enabled) {
+      config.channels.discord.enabled = true;
+      changed = true;
+    }
+    if (!config.channels.discord.dmPolicy) {
+      config.channels.discord.dmPolicy = "pairing";
+      changed = true;
+    }
     if (config.channels.discord.token !== DISCORD_BOT_TOKEN) {
       config.channels.discord.token = DISCORD_BOT_TOKEN;
-      config.channels.discord.enabled = true;
-      if (!config.channels.discord.dmPolicy) config.channels.discord.dmPolicy = "pairing";
       changed = true;
     }
   }
 
   if (SLACK_BOT_TOKEN) {
     config.channels.slack = config.channels.slack || {};
+    if (!config.channels.slack.enabled) {
+      config.channels.slack.enabled = true;
+      changed = true;
+    }
+    if (!config.channels.slack.dmPolicy) {
+      config.channels.slack.dmPolicy = "pairing";
+      changed = true;
+    }
     if (config.channels.slack.botToken !== SLACK_BOT_TOKEN) {
       config.channels.slack.botToken = SLACK_BOT_TOKEN;
-      config.channels.slack.enabled = true;
-      if (!config.channels.slack.dmPolicy) config.channels.slack.dmPolicy = "pairing";
       changed = true;
     }
   }
@@ -350,8 +368,9 @@ try {
     // No key? User will pick model in /setup wizard after adding a key in Railway
 
     if (TELEGRAM_BOT_TOKEN)
-      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, dmPolicy: "pairing" };
+      defaults.channels.telegram = { ...defaults.channels?.telegram, botToken: TELEGRAM_BOT_TOKEN, enabled: true, dmPolicy: "pairing" };
     if (DISCORD_BOT_TOKEN)
+      defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, enabled: true, dmPolicy: "pairing" };
       defaults.channels.discord = { ...defaults.channels?.discord, token: DISCORD_BOT_TOKEN, dmPolicy: "pairing" };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2), { mode: 0o600 });
     console.log("[boot] First run — wrote default config →", CONFIG_PATH);
