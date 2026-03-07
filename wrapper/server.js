@@ -361,45 +361,24 @@ try {
 }
 
 // Watch config file — re-patch every time OpenClaw rewrites it
-function watchConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
-    setTimeout(watchConfig, 2000);
-    return;
-  }
-  try {
-    fs.watch(CONFIG_PATH, (event) => {
-      if (event === "change") {
-        setTimeout(() => patchConfig("fs.watch"), 200);
-      }
-    });
-    console.log("[config] Watching", CONFIG_PATH, "for OpenClaw rewrites");
-    patchConfig("initial");
-  } catch (e) {
-    console.error("[config] Watch failed:", e.message);
-  }
-}
 
 // ─── Gateway management ───────────────────────────────────────────────────────
+// Single managed process. Only ONE gateway runs at a time.
+// Uses --force to reclaim the port/lock from stale processes.
+// Config watcher is started exactly once.
 
-let gatewayProcess = null;
+let gatewayProcess = null;   // the child we own — null means "no managed child"
 let gatewayReady = false;
+let gatewayStarting = false; // true between spawn and first exit/ready
 let restartCount = 0;
-let configPatchRestartPending = false;
+let pendingRestart = null;   // reason string when a restart is queued
+let configWatcherStarted = false;
 const MAX_RESTARTS = 10;
 const RESTART_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
 
-function startGateway() {
-  if (configErrors.some(e => e.includes("GATEWAY_TOKEN"))) return;
-  if (restartCount >= MAX_RESTARTS) { console.error("[gateway] Too many restarts."); return; }
-
-  console.log(`[gateway] Starting (attempt ${restartCount + 1})...`);
-  gatewayReady = false;
-
-  // FIX #1 continued: correct env vars for the gateway subprocess.
-  // HOME=/data → gateway resolves $HOME/.openclaw = /data/.openclaw ✓
-  // OPENCLAW_STATE_DIR is the explicit override (belt + suspenders)
-  // OPENCLAW_WORKSPACE_DIR (not OPENCLAW_WORKSPACE) is the standard var
-  const env = {
+// Environment block shared by every gateway spawn
+function gatewayEnv() {
+  return {
     ...process.env,
     HOME: "/data",
     OPENCLAW_STATE_DIR: STATE_DIR,
@@ -415,41 +394,122 @@ function startGateway() {
     ...(SLACK_BOT_TOKEN && { SLACK_BOT_TOKEN }),
     ...(SLACK_APP_TOKEN && { SLACK_APP_TOKEN }),
   };
+}
 
-  gatewayProcess = spawn("node", [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT), "--allow-unconfigured"], {
-    env, stdio: ["ignore", "inherit", "inherit"],
+function startGateway() {
+  // ── Guards: never start a second one ──
+  if (configErrors.some(e => e.includes("GATEWAY_TOKEN"))) return;
+  if (gatewayStarting) { console.log("[gateway] Start already in progress, skipping."); return; }
+  if (gatewayProcess) { console.log("[gateway] Already running (PID " + gatewayProcess.pid + "), skipping."); return; }
+  if (restartCount >= MAX_RESTARTS) { console.error("[gateway] Too many restarts — giving up."); return; }
+
+  gatewayStarting = true;
+  gatewayReady = false;
+  console.log(`[gateway] Starting (attempt ${restartCount + 1})...`);
+
+  // --force reclaims port + lockfile from stale processes
+  const child = spawn("node", [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT), "--force", "--allow-unconfigured"], {
+    env: gatewayEnv(), stdio: ["ignore", "inherit", "inherit"],
   });
 
-  gatewayProcess.on("spawn", () => { console.log("[gateway] PID:", gatewayProcess.pid); pollGatewayReady(); });
-  gatewayProcess.on("exit", (code, signal) => {
+  gatewayProcess = child;
+
+  child.on("spawn", () => {
+    console.log("[gateway] PID:", child.pid);
+    pollGatewayReady(child);
+  });
+
+  child.on("error", (err) => {
+    console.error("[gateway] Spawn error:", err.message);
+    gatewayProcess = null;
+    gatewayStarting = false;
+    scheduleRestart();
+  });
+
+  child.on("exit", (code, signal) => {
+    // Only act on exits from OUR current child (ignore stale listeners)
+    if (gatewayProcess !== child) return;
+
+    gatewayProcess = null;
     gatewayReady = false;
-    if (configPatchRestartPending) {
-      configPatchRestartPending = false;
-      console.log("[gateway] Config-patch restart — restarting immediately...");
+    gatewayStarting = false;
+
+    if (pendingRestart) {
+      const reason = pendingRestart;
+      pendingRestart = null;
+      restartCount = 0; // intentional restart, don't penalise
+      console.log(`[gateway] Stopped for restart (${reason}) — starting fresh...`);
       setTimeout(startGateway, 500);
+    } else if (signal === "SIGTERM") {
+      console.log("[gateway] Stopped (SIGTERM).");
+      // Intentional kill (e.g. container shutdown) — don't auto-restart
     } else {
-      restartCount++;
-      const delay = RESTART_DELAYS[Math.min(restartCount - 1, RESTART_DELAYS.length - 1)];
-      console.warn(`[gateway] Exited code=${code}, restarting in ${delay}ms...`);
-      setTimeout(startGateway, delay);
+      console.warn(`[gateway] Exited unexpectedly (code=${code}, signal=${signal}).`);
+      scheduleRestart();
     }
   });
 }
 
-function pollGatewayReady(attempts = 0) {
-  if (attempts > 90) { console.error("[gateway] Never became ready"); return; }
+function scheduleRestart() {
+  restartCount++;
+  if (restartCount > MAX_RESTARTS) { console.error("[gateway] Too many restarts — giving up."); return; }
+  const delay = RESTART_DELAYS[Math.min(restartCount - 1, RESTART_DELAYS.length - 1)];
+  console.log(`[gateway] Will retry in ${delay}ms (attempt ${restartCount}/${MAX_RESTARTS})...`);
+  setTimeout(startGateway, delay);
+}
+
+function restartGateway(reason = "config change") {
+  if (gatewayProcess) {
+    console.log(`[gateway] Requesting restart (${reason})...`);
+    pendingRestart = reason;
+    gatewayProcess.kill("SIGTERM");
+    // The exit handler will call startGateway() after the process exits
+  } else {
+    // No process running — start directly
+    restartCount = 0;
+    console.log(`[gateway] Not running — starting (${reason})...`);
+    startGateway();
+  }
+}
+
+function pollGatewayReady(expectedChild, attempts = 0) {
+  // Stop polling if the child we're polling for is no longer the active one
+  if (gatewayProcess !== expectedChild) return;
+  if (attempts > 90) { console.error("[gateway] Never became ready after 90s"); return; }
+
   const req = http.get({ hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: "/healthz", timeout: 1000 }, res => {
+    if (gatewayProcess !== expectedChild) return; // check again after async
     if (res.statusCode < 500) {
       gatewayReady = true;
+      gatewayStarting = false;
       restartCount = 0;
       console.log("[gateway] Ready ✓");
       console.log("[gateway] Note: 'dangerouslyDisableDeviceAuth' security warning is expected.");
       console.log("[gateway] Device auth is handled by the wrapper's SETUP_PASSWORD + Railway HTTPS.");
-      watchConfig();
+      ensureConfigWatcher();
+    } else {
+      setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000);
     }
   });
-  req.on("error", () => setTimeout(() => pollGatewayReady(attempts + 1), 1000));
+  req.on("error", () => setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000));
   req.end();
+}
+
+function ensureConfigWatcher() {
+  if (configWatcherStarted) return;
+  if (!fs.existsSync(CONFIG_PATH)) { setTimeout(ensureConfigWatcher, 2000); return; }
+  try {
+    fs.watch(CONFIG_PATH, (event) => {
+      if (event === "change") {
+        setTimeout(() => patchConfig("fs.watch"), 200);
+      }
+    });
+    configWatcherStarted = true;
+    console.log("[config] Watching", CONFIG_PATH, "for OpenClaw rewrites");
+    patchConfig("initial");
+  } catch (e) {
+    console.error("[config] Watch failed:", e.message);
+  }
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -1078,6 +1138,7 @@ const server = http.createServer((req, res) => {
           syncChannelTokens(config);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Added ${channel} allowFrom: ${senderId}`);
+          restartGateway("allowFrom update");
 
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(config, true));
@@ -1125,6 +1186,7 @@ const server = http.createServer((req, res) => {
           syncChannelTokens(config);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Model set to: ${model}`);
+          restartGateway("model update");
 
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(config, true));
@@ -1186,7 +1248,7 @@ const server = http.createServer((req, res) => {
           syncChannelTokens(config);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
           console.log(`[setup] Tool policy: allow=[${selectedTools.join(",")}], exec=${selectedTools.includes("exec") ? (execApproval ? "ON+approval" : "ON+no-approval") : "OFF"}`);
-
+          restartGateway("tool policy update");
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(config, true));
         } catch (e) {
@@ -1222,6 +1284,7 @@ const server = http.createServer((req, res) => {
 
           syncChannelTokens(parsed);
           fs.writeFileSync(CONFIG_PATH, JSON.stringify(parsed, null, 2), { mode: 0o600 });
+          restartGateway("config JSON update");
           res.writeHead(200, { "Content-Type": "text/html" });
           res.end(setupPage(parsed, true));
         } catch (e) {
@@ -1336,6 +1399,7 @@ server.listen(PORT, () => {
 });
 
 process.on("SIGTERM", () => {
+  pendingRestart = null; // ensure exit handler doesn't restart
   if (gatewayProcess) gatewayProcess.kill("SIGTERM");
   server.close(() => process.exit(0));
 });
