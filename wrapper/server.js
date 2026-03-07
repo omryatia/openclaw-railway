@@ -364,7 +364,6 @@ try {
 
 // ─── Gateway management ───────────────────────────────────────────────────────
 // Single managed process. Only ONE gateway runs at a time.
-// Uses --force to reclaim the port/lock from stale processes.
 // Config watcher is started exactly once.
 
 let gatewayProcess = null;   // the child we own — null means "no managed child"
@@ -397,6 +396,7 @@ function gatewayEnv() {
 }
 
 function startGateway() {
+  // ── Guards: never start a second one ──
   if (configErrors.some(e => e.includes("GATEWAY_TOKEN"))) return;
   if (gatewayStarting) { console.log("[gateway] Start already in progress, skipping."); return; }
   if (gatewayProcess) { console.log("[gateway] Already running (PID " + gatewayProcess.pid + "), skipping."); return; }
@@ -406,21 +406,13 @@ function startGateway() {
   gatewayReady = false;
   console.log(`[gateway] Starting (attempt ${restartCount + 1})...`);
 
-  const args = [
-    OPENCLAW_BIN,
-    "gateway",
-    "--port",
-    String(GATEWAY_PORT),
-    "--force",
-  ];
-
+  const args = [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT)];
   if (isFirstRun()) {
     args.push("--allow-unconfigured");
   }
 
   const child = spawn("node", args, {
-    env: gatewayEnv(),
-    stdio: ["ignore", "inherit", "inherit"],
+    env: gatewayEnv(), stdio: ["ignore", "inherit", "inherit"],
   });
 
   gatewayProcess = child;
@@ -438,6 +430,7 @@ function startGateway() {
   });
 
   child.on("exit", (code, signal) => {
+    // Only act on exits from OUR current child (ignore stale listeners)
     if (gatewayProcess !== child) return;
 
     gatewayProcess = null;
@@ -447,11 +440,12 @@ function startGateway() {
     if (pendingRestart) {
       const reason = pendingRestart;
       pendingRestart = null;
-      restartCount = 0;
+      restartCount = 0; // intentional restart, don't penalise
       console.log(`[gateway] Stopped for restart (${reason}) — starting fresh...`);
       setTimeout(startGateway, 500);
     } else if (signal === "SIGTERM") {
       console.log("[gateway] Stopped (SIGTERM).");
+      // Intentional kill (e.g. container shutdown) — don't auto-restart
     } else {
       console.warn(`[gateway] Exited unexpectedly (code=${code}, signal=${signal}).`);
       scheduleRestart();
@@ -471,17 +465,10 @@ function restartGateway(reason = "config change") {
   if (gatewayProcess) {
     console.log(`[gateway] Requesting restart (${reason})...`);
     pendingRestart = reason;
-    const child = gatewayProcess;
-
-    try { child.kill("SIGTERM"); } catch {}
-
-    setTimeout(() => {
-      if (gatewayProcess === child) {
-        console.warn("[gateway] Graceful stop timed out, forcing SIGKILL...");
-        try { child.kill("SIGKILL"); } catch {}
-      }
-    }, 5000);
+    gatewayProcess.kill("SIGTERM");
+    // The exit handler will call startGateway() after the process exits
   } else {
+    // No process running — start directly
     restartCount = 0;
     console.log(`[gateway] Not running — starting (${reason})...`);
     startGateway();
@@ -489,52 +476,25 @@ function restartGateway(reason = "config change") {
 }
 
 function pollGatewayReady(expectedChild, attempts = 0) {
+  // Stop polling if the child we're polling for is no longer the active one
   if (gatewayProcess !== expectedChild) return;
+  if (attempts > 90) { console.error("[gateway] Never became ready after 90s"); return; }
 
-  if (attempts > 90) {
-    console.error("[gateway] Never became ready after 90s");
-    gatewayReady = false;
-    gatewayStarting = false;
-
-    pendingRestart = "startup timeout";
-
-    try {
-      expectedChild.kill("SIGTERM");
-    } catch {}
-
-    setTimeout(() => {
-      if (gatewayProcess === expectedChild) {
-        console.warn("[gateway] Child did not stop after timeout, forcing SIGKILL");
-        try { expectedChild.kill("SIGKILL"); } catch {}
-      }
-    }, 5000);
-
-    return;
-  }
-
-  const req = http.get(
-    { hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: "/healthz", timeout: 1000 },
-    (res) => {
-      if (gatewayProcess !== expectedChild) return;
-
-      if (res.statusCode < 500) {
-        gatewayReady = true;
-        gatewayStarting = false;
-        restartCount = 0;
-        console.log("[gateway] Ready ✓");
-        console.log("[gateway] Note: 'dangerouslyDisableDeviceAuth' security warning is expected.");
-        console.log("[gateway] Device auth is handled by the wrapper's SETUP_PASSWORD + Railway HTTPS.");
-        ensureConfigWatcher();
-      } else {
-        setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000);
-      }
+  const req = http.get({ hostname: GATEWAY_HOST, port: GATEWAY_PORT, path: "/healthz", timeout: 1000 }, res => {
+    if (gatewayProcess !== expectedChild) return; // check again after async
+    if (res.statusCode < 500) {
+      gatewayReady = true;
+      gatewayStarting = false;
+      restartCount = 0;
+      console.log("[gateway] Ready ✓");
+      console.log("[gateway] Note: 'dangerouslyDisableDeviceAuth' security warning is expected.");
+      console.log("[gateway] Device auth is handled by the wrapper's SETUP_PASSWORD + Railway HTTPS.");
+      ensureConfigWatcher();
+    } else {
+      setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000);
     }
-  );
-
-  req.on("error", () => {
-    setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000);
   });
-
+  req.on("error", () => setTimeout(() => pollGatewayReady(expectedChild, attempts + 1), 1000));
   req.end();
 }
 
@@ -1442,7 +1402,16 @@ server.listen(PORT, () => {
 });
 
 process.on("SIGTERM", () => {
-  pendingRestart = null; // ensure exit handler doesn't restart
-  if (gatewayProcess) gatewayProcess.kill("SIGTERM");
+  pendingRestart = null;
+  gatewayReady = false;
+  gatewayStarting = false;
+
+  if (gatewayProcess) {
+    try { gatewayProcess.kill("SIGTERM"); } catch {}
+  }
+
   server.close(() => process.exit(0));
+
+  // Hard exit if graceful shutdown stalls
+  setTimeout(() => process.exit(0), 8000);
 });
