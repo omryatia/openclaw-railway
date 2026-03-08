@@ -506,6 +506,42 @@ function gatewayEnv() {
   };
 }
 
+function runOpenClawCli(args) {
+  return new Promise((resolve) => {
+    const child = spawn("node", [OPENCLAW_BIN, ...args], {
+      env: gatewayEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("close", (code) => {
+      resolve({
+        code,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      });
+    });
+
+    child.on("error", (err) => {
+      resolve({
+        code: 1,
+        stdout: "",
+        stderr: err.message,
+      });
+    });
+  });
+}
+
 function scheduleRestart() {
   if (shutdownInProgress) return;
 
@@ -799,6 +835,7 @@ function renderSetupPage(config, opts = {}) {
     .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#222;margin-right:8px}
     .list{line-height:1.8}
     a{color:#ff9566}
+    pre{white-space:pre-wrap;background:#111;border:1px solid #333;padding:12px;border-radius:8px;margin-top:12px}
     @media (max-width: 700px){ .row{grid-template-columns:1fr} }
   </style>
 </head>
@@ -821,6 +858,21 @@ function renderSetupPage(config, opts = {}) {
       }
       ${saved}
       ${error}
+    </div>
+
+    <div class="card">
+      <h2>Browser device approval</h2>
+      <p class="muted">
+        If the Control UI shows <code>device identity required</code>, open the UI once,
+        then come back here and approve the latest pending browser device request.
+      </p>
+      <form method="POST" action="/setup/device/approve-latest">
+        <button type="submit">Approve latest browser device</button>
+      </form>
+      <form method="POST" action="/setup/device/list" style="margin-top:10px">
+        <button type="submit">Show pending devices</button>
+      </form>
+      ${opts.deviceOutput ? `<pre>${escapeHtml(opts.deviceOutput)}</pre>` : ""}
     </div>
 
     <div class="card">
@@ -931,6 +983,44 @@ async function handleSetup(req, res) {
   const params = new URLSearchParams(body);
 
   try {
+    if (req.url === "/setup/device/list") {
+      const result = await runOpenClawCli(["devices", "list"]);
+      const config = readConfig();
+      const output =
+        result.stdout ||
+        result.stderr ||
+        `Command exited with code ${result.code}`;
+
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(
+        renderSetupPage(config, {
+          saved: result.code === 0,
+          error: result.code === 0 ? "" : "Failed to list devices.",
+          deviceOutput: output,
+        })
+      );
+      return;
+    }
+
+    if (req.url === "/setup/device/approve-latest") {
+      const result = await runOpenClawCli(["devices", "approve", "--latest"]);
+      const config = readConfig();
+      const output =
+        result.stdout ||
+        result.stderr ||
+        `Command exited with code ${result.code}`;
+
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(
+        renderSetupPage(config, {
+          saved: result.code === 0,
+          error: result.code === 0 ? "" : "Failed to approve latest device.",
+          deviceOutput: output,
+        })
+      );
+      return;
+    }
+
     if (req.url === "/setup/model") {
       const model = (params.get("model") || "").trim();
       if (!model) throw new Error("Please select a model.");
