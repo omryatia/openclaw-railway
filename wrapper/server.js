@@ -37,6 +37,12 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || "";
 const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || "";
 const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN || "";
 
+// Convenience mode for a template.
+// This auto-approves the latest pending browser device.
+// Security tradeoff: weaker than manual device approval.
+const AUTO_APPROVE_LATEST_DEVICE =
+  String(process.env.AUTO_APPROVE_LATEST_DEVICE || "true").toLowerCase() === "true";
+
 // -----------------------------------------------------------------------------
 // Validation
 // -----------------------------------------------------------------------------
@@ -204,7 +210,7 @@ function stripIncomingProxyHeaders(original) {
     "cf-ipcountry",
     "cf-ray",
     "cf-visitor",
-    "true-client-ip",
+    "true-client-ip"
   ]);
 
   const clean = {};
@@ -235,6 +241,17 @@ function buildProxyHeaders(req, extra = {}) {
   }
 
   return headers;
+}
+
+function splitCsvList(value) {
+  return String(value || "")
+    .split(/[\s,]+/)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function boolFromParams(params, key) {
+  return params.get(key) === "on";
 }
 
 // -----------------------------------------------------------------------------
@@ -290,53 +307,53 @@ function createBaseConfig() {
       port: GATEWAY_PORT,
       auth: {
         mode: "token",
-        token: OPENCLAW_GATEWAY_TOKEN,
+        token: OPENCLAW_GATEWAY_TOKEN
       },
       trustedProxies: ["127.0.0.1", "::1"],
       controlUi: {
         allowedOrigins: buildAllowedOrigins(),
-        dangerouslyDisableDeviceAuth: true,
-      },
+        dangerouslyDisableDeviceAuth: true
+      }
     },
     agents: {
       defaults: {
         workspace: WORKSPACE_DIR,
         sandbox: {
-          mode: "non-main",
-        },
-      },
+          mode: "non-main"
+        }
+      }
     },
     commands: {
       native: "auto",
       nativeSkills: "auto",
       restart: true,
-      ownerDisplay: "raw",
+      ownerDisplay: "raw"
     },
     tools: {
       allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
       deny: ["exec"],
       elevated: {
-        enabled: false,
-      },
+        enabled: false
+      }
     },
     channels: {
       telegram: {
         dmPolicy: "pairing",
-        groupPolicy: "disabled",
+        groupPolicy: "disabled"
       },
       discord: {
-        dmPolicy: "pairing",
+        dmPolicy: "pairing"
       },
       slack: {
-        dmPolicy: "pairing",
+        dmPolicy: "pairing"
       },
-      whatsapp: {},
-    },
+      whatsapp: {}
+    }
   };
 
   if (model) {
     config.agents.defaults.model = {
-      primary: model,
+      primary: model
     };
   }
 
@@ -425,8 +442,8 @@ function normalizeConfig(input) {
       allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
       deny: ["exec"],
       elevated: {
-        enabled: false,
-      },
+        enabled: false
+      }
     };
   }
 
@@ -482,6 +499,8 @@ let shutdownInProgress = false;
 let configWatcherStarted = false;
 let pendingRestartReason = null;
 let restartCount = 0;
+let deviceApproveRunning = false;
+let autoApproveTimer = null;
 
 const MAX_RESTARTS = 10;
 const RESTART_DELAYS = [1000, 2000, 4000, 8000, 16000, 30000];
@@ -502,7 +521,7 @@ function gatewayEnv() {
     ...(TELEGRAM_BOT_TOKEN && { TELEGRAM_BOT_TOKEN }),
     ...(DISCORD_BOT_TOKEN && { DISCORD_BOT_TOKEN }),
     ...(SLACK_BOT_TOKEN && { SLACK_BOT_TOKEN }),
-    ...(SLACK_APP_TOKEN && { SLACK_APP_TOKEN }),
+    ...(SLACK_APP_TOKEN && { SLACK_APP_TOKEN })
   };
 }
 
@@ -510,7 +529,7 @@ function runOpenClawCli(args) {
   return new Promise((resolve) => {
     const child = spawn("node", [OPENCLAW_BIN, ...args], {
       env: gatewayEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"]
     });
 
     let stdout = "";
@@ -528,7 +547,7 @@ function runOpenClawCli(args) {
       resolve({
         code,
         stdout: stdout.trim(),
-        stderr: stderr.trim(),
+        stderr: stderr.trim()
       });
     });
 
@@ -536,10 +555,59 @@ function runOpenClawCli(args) {
       resolve({
         code: 1,
         stdout: "",
-        stderr: err.message,
+        stderr: err.message
       });
     });
   });
+}
+
+async function approveLatestDevice(source = "manual") {
+  if (deviceApproveRunning) {
+    return { code: 0, stdout: "", stderr: "approval already running" };
+  }
+
+  deviceApproveRunning = true;
+  try {
+    const result = await runOpenClawCli(["devices", "approve", "--latest"]);
+    const text = `${result.stdout}\n${result.stderr}`.toLowerCase();
+
+    const noPending =
+      text.includes("no pending") ||
+      text.includes("no requests") ||
+      text.includes("nothing to approve");
+
+    if (result.code === 0 && !noPending && (result.stdout || result.stderr)) {
+      console.log(`[devices] approved latest device (${source})`);
+    } else if (result.code !== 0 && !noPending && source !== "poll") {
+      console.warn(`[devices] approve latest failed: ${result.stderr || result.stdout || result.code}`);
+    }
+
+    return result;
+  } finally {
+    deviceApproveRunning = false;
+  }
+}
+
+function startAutoApproveLoop() {
+  if (!AUTO_APPROVE_LATEST_DEVICE || autoApproveTimer) return;
+
+  autoApproveTimer = setInterval(() => {
+    if (shutdownInProgress || !gatewayReady) return;
+    approveLatestDevice("poll").catch(() => {});
+  }, 7000);
+
+  setTimeout(() => {
+    if (!shutdownInProgress && gatewayReady) {
+      approveLatestDevice("startup").catch(() => {});
+    }
+  }, 4000);
+}
+
+function stopAutoApproveLoop() {
+  if (autoApproveTimer) {
+    clearInterval(autoApproveTimer);
+    autoApproveTimer = null;
+  }
 }
 
 function scheduleRestart() {
@@ -625,7 +693,7 @@ function pollGatewayReady(expectedChild, attempts = 0) {
       hostname: GATEWAY_HOST,
       port: GATEWAY_PORT,
       path: "/healthz",
-      timeout: 1000,
+      timeout: 1000
     },
     (res) => {
       if (gatewayProcess !== expectedChild) return;
@@ -636,6 +704,7 @@ function pollGatewayReady(expectedChild, attempts = 0) {
         restartCount = 0;
         console.log("[gateway] Ready ✓");
         ensureConfigWatcher();
+        startAutoApproveLoop();
         return;
       }
 
@@ -676,7 +745,7 @@ function startGateway() {
     [OPENCLAW_BIN, "gateway", "--port", String(GATEWAY_PORT)],
     {
       env: gatewayEnv(),
-      stdio: ["ignore", "inherit", "inherit"],
+      stdio: ["ignore", "inherit", "inherit"]
     }
   );
 
@@ -761,30 +830,175 @@ function restartGateway(reason = "config change") {
 // UI
 // -----------------------------------------------------------------------------
 
-function missingConfigPage() {
-  return `<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>OpenClaw Setup Required</title>
-  <style>
-    body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eaeaea;padding:32px}
-    .card{max-width:760px;margin:0 auto;background:#171717;border:1px solid #333;border-radius:12px;padding:24px}
-    h1{margin-top:0}
-    code{background:#222;padding:2px 6px;border-radius:4px}
-    li{margin:8px 0}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>OpenClaw wrapper is missing required variables</h1>
-    <ul>
-      ${configErrors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}
-    </ul>
-    <p>Set them in Railway Variables and redeploy.</p>
-  </div>
-</body>
-</html>`;
+function channelEditorCard(config, channelName) {
+  const channel = config.channels?.[channelName] || {};
+  const allowFrom = Array.isArray(channel.allowFrom) ? channel.allowFrom.join(", ") : "";
+
+  if (channelName === "telegram") {
+    return `
+      <div class="card">
+        <h2>Telegram</h2>
+        <p class="muted">Token source: <code>TELEGRAM_BOT_TOKEN</code> from Railway Variables.</p>
+        <form method="POST" action="/setup/channel">
+          <input type="hidden" name="channel" value="telegram">
+          <label><input type="checkbox" name="enabled" ${channel.enabled ? "checked" : ""}> enabled</label>
+          <label>DM policy
+            <select name="dmPolicy">
+              <option value="">(keep)</option>
+              <option value="pairing" ${channel.dmPolicy === "pairing" ? "selected" : ""}>pairing</option>
+              <option value="allowlist" ${channel.dmPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.dmPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Group policy
+            <select name="groupPolicy">
+              <option value="">(keep)</option>
+              <option value="disabled" ${channel.groupPolicy === "disabled" ? "selected" : ""}>disabled</option>
+              <option value="allowlist" ${channel.groupPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.groupPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Streaming
+            <select name="streaming">
+              <option value="">(default)</option>
+              <option value="off" ${channel.streaming === "off" ? "selected" : ""}>off</option>
+              <option value="partial" ${channel.streaming === "partial" ? "selected" : ""}>partial</option>
+            </select>
+          </label>
+          <label>Allow from (comma separated IDs)
+            <input type="text" name="allowFrom" value="${escapeHtml(allowFrom)}">
+          </label>
+          <label><input type="checkbox" name="autoSelectFamily" ${channel.network?.autoSelectFamily ? "checked" : ""}> network.autoSelectFamily</label>
+          <label>network.dnsResultOrder
+            <input type="text" name="dnsResultOrder" value="${escapeHtml(channel.network?.dnsResultOrder || "")}" placeholder="ipv4first">
+          </label>
+          <button type="submit">Save Telegram</button>
+        </form>
+      </div>
+    `;
+  }
+
+  if (channelName === "discord") {
+    return `
+      <div class="card">
+        <h2>Discord</h2>
+        <p class="muted">Token source: <code>DISCORD_BOT_TOKEN</code> from Railway Variables.</p>
+        <form method="POST" action="/setup/channel">
+          <input type="hidden" name="channel" value="discord">
+          <label><input type="checkbox" name="enabled" ${channel.enabled ? "checked" : ""}> enabled</label>
+          <label>DM policy
+            <select name="dmPolicy">
+              <option value="">(keep)</option>
+              <option value="pairing" ${channel.dmPolicy === "pairing" ? "selected" : ""}>pairing</option>
+              <option value="allowlist" ${channel.dmPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.dmPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Group policy
+            <select name="groupPolicy">
+              <option value="">(keep)</option>
+              <option value="disabled" ${channel.groupPolicy === "disabled" ? "selected" : ""}>disabled</option>
+              <option value="allowlist" ${channel.groupPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.groupPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Streaming
+            <select name="streaming">
+              <option value="">(default)</option>
+              <option value="off" ${channel.streaming === "off" ? "selected" : ""}>off</option>
+              <option value="partial" ${channel.streaming === "partial" ? "selected" : ""}>partial</option>
+            </select>
+          </label>
+          <label>Allow from (comma separated IDs)
+            <input type="text" name="allowFrom" value="${escapeHtml(allowFrom)}">
+          </label>
+          <button type="submit">Save Discord</button>
+        </form>
+      </div>
+    `;
+  }
+
+  if (channelName === "slack") {
+    return `
+      <div class="card">
+        <h2>Slack</h2>
+        <p class="muted">Tokens source: <code>SLACK_BOT_TOKEN</code> and <code>SLACK_APP_TOKEN</code> from Railway Variables.</p>
+        <form method="POST" action="/setup/channel">
+          <input type="hidden" name="channel" value="slack">
+          <label><input type="checkbox" name="enabled" ${channel.enabled ? "checked" : ""}> enabled</label>
+          <label>Mode
+            <input type="text" name="mode" value="${escapeHtml(channel.mode || "socket")}" placeholder="socket">
+          </label>
+          <label>DM policy
+            <select name="dmPolicy">
+              <option value="">(keep)</option>
+              <option value="pairing" ${channel.dmPolicy === "pairing" ? "selected" : ""}>pairing</option>
+              <option value="allowlist" ${channel.dmPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.dmPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Group policy
+            <select name="groupPolicy">
+              <option value="">(keep)</option>
+              <option value="disabled" ${channel.groupPolicy === "disabled" ? "selected" : ""}>disabled</option>
+              <option value="allowlist" ${channel.groupPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.groupPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Streaming
+            <select name="streaming">
+              <option value="">(default)</option>
+              <option value="off" ${channel.streaming === "off" ? "selected" : ""}>off</option>
+              <option value="partial" ${channel.streaming === "partial" ? "selected" : ""}>partial</option>
+            </select>
+          </label>
+          <label><input type="checkbox" name="nativeStreaming" ${channel.nativeStreaming ? "checked" : ""}> nativeStreaming</label>
+          <label>Allow from (comma separated IDs)
+            <input type="text" name="allowFrom" value="${escapeHtml(allowFrom)}">
+          </label>
+          <button type="submit">Save Slack</button>
+        </form>
+      </div>
+    `;
+  }
+
+  if (channelName === "whatsapp") {
+    return `
+      <div class="card">
+        <h2>WhatsApp</h2>
+        <p class="muted">WhatsApp itself is linked later from the dashboard QR flow.</p>
+        <form method="POST" action="/setup/channel">
+          <input type="hidden" name="channel" value="whatsapp">
+          <label><input type="checkbox" name="enabled" ${channel.enabled ? "checked" : ""}> enabled</label>
+          <label>DM policy
+            <select name="dmPolicy">
+              <option value="">(keep)</option>
+              <option value="pairing" ${channel.dmPolicy === "pairing" ? "selected" : ""}>pairing</option>
+              <option value="allowlist" ${channel.dmPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.dmPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Group policy
+            <select name="groupPolicy">
+              <option value="">(keep)</option>
+              <option value="disabled" ${channel.groupPolicy === "disabled" ? "selected" : ""}>disabled</option>
+              <option value="allowlist" ${channel.groupPolicy === "allowlist" ? "selected" : ""}>allowlist</option>
+              <option value="open" ${channel.groupPolicy === "open" ? "selected" : ""}>open</option>
+            </select>
+          </label>
+          <label>Allow from (comma separated IDs)
+            <input type="text" name="allowFrom" value="${escapeHtml(allowFrom)}">
+          </label>
+          <label>mediaMaxMb
+            <input type="number" name="mediaMaxMb" value="${escapeHtml(channel.mediaMaxMb || "")}" placeholder="50">
+          </label>
+          <button type="submit">Save WhatsApp</button>
+        </form>
+      </div>
+    `;
+  }
+
+  return "";
 }
 
 function renderSetupPage(config, opts = {}) {
@@ -797,16 +1011,21 @@ function renderSetupPage(config, opts = {}) {
   const envStatus = [
     ["OPENCLAW_GATEWAY_TOKEN", !!OPENCLAW_GATEWAY_TOKEN],
     ["SETUP_PASSWORD", !!SETUP_PASSWORD],
+    ["AUTO_APPROVE_LATEST_DEVICE", AUTO_APPROVE_LATEST_DEVICE],
     ["OPENROUTER_API_KEY", !!OPENROUTER_API_KEY],
     ["ANTHROPIC_API_KEY", !!ANTHROPIC_API_KEY],
     ["OPENAI_API_KEY", !!OPENAI_API_KEY],
     ["TELEGRAM_BOT_TOKEN", !!TELEGRAM_BOT_TOKEN],
     ["DISCORD_BOT_TOKEN", !!DISCORD_BOT_TOKEN],
     ["SLACK_BOT_TOKEN", !!SLACK_BOT_TOKEN],
-    ["SLACK_APP_TOKEN", !!SLACK_APP_TOKEN],
+    ["SLACK_APP_TOKEN", !!SLACK_APP_TOKEN]
   ];
 
   const configJson = escapeHtml(JSON.stringify(config, null, 2));
+  const dashboardUrl = PUBLIC_URL
+    ? `${PUBLIC_URL}/?token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`
+    : null;
+  const setupUrl = PUBLIC_URL ? `${PUBLIC_URL}/setup` : "/setup";
 
   return `<!doctype html>
 <html>
@@ -817,7 +1036,7 @@ function renderSetupPage(config, opts = {}) {
   <style>
     *{box-sizing:border-box}
     body{font-family:system-ui,sans-serif;background:#0f0f0f;color:#eaeaea;padding:24px;margin:0}
-    .wrap{max-width:980px;margin:0 auto}
+    .wrap{max-width:1100px;margin:0 auto}
     .card{background:#171717;border:1px solid #2b2b2b;border-radius:12px;padding:20px;margin-bottom:18px}
     h1,h2{margin-top:0}
     .muted{color:#aaa}
@@ -832,11 +1051,17 @@ function renderSetupPage(config, opts = {}) {
     button:hover{filter:brightness(1.05)}
     code{background:#222;padding:2px 6px;border-radius:4px}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
     .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#222;margin-right:8px}
     .list{line-height:1.8}
     a{color:#ff9566}
     pre{white-space:pre-wrap;background:#111;border:1px solid #333;padding:12px;border-radius:8px;margin-top:12px}
-    @media (max-width: 700px){ .row{grid-template-columns:1fr} }
+    .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:12px}
+    .actions a{display:inline-block;padding:10px 14px;background:#ff6b35;color:#fff;text-decoration:none;border-radius:8px}
+    .actions a.secondary{background:#333}
+    label{display:block;margin-top:10px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    @media (max-width: 900px){ .grid,.row,.three{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
@@ -849,13 +1074,10 @@ function renderSetupPage(config, opts = {}) {
       <p class="muted">Public URL: ${PUBLIC_URL ? `<a href="${escapeHtml(PUBLIC_URL)}" target="_blank">${escapeHtml(PUBLIC_URL)}</a>` : "not set"}</p>
       <p class="muted">Private domain: ${PRIVATE_DOMAIN ? escapeHtml(PRIVATE_DOMAIN) : "not set"}</p>
       <p class="muted">Config: <code>${escapeHtml(CONFIG_PATH)}</code></p>
-      ${
-        PUBLIC_URL && gatewayReady
-          ? `<p><a href="${escapeHtml(PUBLIC_URL)}/?token=${encodeURIComponent(
-              OPENCLAW_GATEWAY_TOKEN
-            )}" target="_blank">Open Control UI</a></p>`
-          : ""
-      }
+      <div class="actions">
+        ${dashboardUrl ? `<a href="${escapeHtml(dashboardUrl)}" target="_blank">Open Dashboard</a>` : ""}
+        <a href="${escapeHtml(setupUrl)}" class="secondary">Open Setup</a>
+      </div>
       ${saved}
       ${error}
     </div>
@@ -863,14 +1085,15 @@ function renderSetupPage(config, opts = {}) {
     <div class="card">
       <h2>Browser device approval</h2>
       <p class="muted">
-        If the Control UI shows <code>device identity required</code>, open the UI once,
-        then come back here and approve the latest pending browser device request.
+        Auto approve is <code>${AUTO_APPROVE_LATEST_DEVICE ? "enabled" : "disabled"}</code>.
+        If the dashboard still shows <code>device identity required</code>, open the dashboard once,
+        then open it again in an incognito/private window or clear site storage once.
       </p>
       <form method="POST" action="/setup/device/approve-latest">
-        <button type="submit">Approve latest browser device</button>
+        <button type="submit">Approve latest browser device now</button>
       </form>
       <form method="POST" action="/setup/device/list" style="margin-top:10px">
-        <button type="submit">Show pending devices</button>
+        <button type="submit">Show devices</button>
       </form>
       ${opts.deviceOutput ? `<pre>${escapeHtml(opts.deviceOutput)}</pre>` : ""}
     </div>
@@ -882,10 +1105,12 @@ function renderSetupPage(config, opts = {}) {
           .map(([name, ok]) => `<div><span class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span> <code>${name}</code></div>`)
           .join("")}
       </div>
+      <p class="muted">Telegram note: if your logs show <code>401 Unauthorized</code>, the bot token in Railway is invalid and must be replaced.</p>
     </div>
 
     <div class="card">
       <h2>Model</h2>
+      <p class="muted">These are the common template-safe model refs. Anything else can still be entered in Raw config below.</p>
       <form method="POST" action="/setup/model">
         <select name="model">
           <option value="">Select model</option>
@@ -906,7 +1131,7 @@ function renderSetupPage(config, opts = {}) {
     </div>
 
     <div class="card">
-      <h2>Telegram allowlist</h2>
+      <h2>Telegram allowlist quick add</h2>
       <p class="muted">Current DM policy: <code>${escapeHtml(config.channels?.telegram?.dmPolicy || "pairing")}</code></p>
       <p class="muted">Approved IDs: ${
         telegramAllowFrom.length
@@ -920,10 +1145,17 @@ function renderSetupPage(config, opts = {}) {
       </form>
     </div>
 
+    <div class="grid">
+      ${channelEditorCard(config, "telegram")}
+      ${channelEditorCard(config, "discord")}
+      ${channelEditorCard(config, "slack")}
+      ${channelEditorCard(config, "whatsapp")}
+    </div>
+
     <div class="card">
       <h2>Tools</h2>
       <form method="POST" action="/setup/tools">
-        <div class="row">
+        <div class="three">
           <label><input type="checkbox" name="tools" value="read" ${(config.tools?.allow || []).includes("read") ? "checked" : ""}> read</label>
           <label><input type="checkbox" name="tools" value="write" ${(config.tools?.allow || []).includes("write") ? "checked" : ""}> write</label>
           <label><input type="checkbox" name="tools" value="edit" ${(config.tools?.allow || []).includes("edit") ? "checked" : ""}> edit</label>
@@ -966,7 +1198,7 @@ async function handleSetup(req, res) {
   if (!checkSetupAuth(req)) {
     res.writeHead(401, {
       "WWW-Authenticate": 'Basic realm="OpenClaw Setup"',
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "text/plain; charset=utf-8"
     });
     res.end("Authentication required. Use any username and your SETUP_PASSWORD.");
     return;
@@ -996,14 +1228,14 @@ async function handleSetup(req, res) {
         renderSetupPage(config, {
           saved: result.code === 0,
           error: result.code === 0 ? "" : "Failed to list devices.",
-          deviceOutput: output,
+          deviceOutput: output
         })
       );
       return;
     }
 
     if (req.url === "/setup/device/approve-latest") {
-      const result = await runOpenClawCli(["devices", "approve", "--latest"]);
+      const result = await approveLatestDevice("manual");
       const config = readConfig();
       const output =
         result.stdout ||
@@ -1015,7 +1247,7 @@ async function handleSetup(req, res) {
         renderSetupPage(config, {
           saved: result.code === 0,
           error: result.code === 0 ? "" : "Failed to approve latest device.",
-          deviceOutput: output,
+          deviceOutput: output
         })
       );
       return;
@@ -1060,6 +1292,71 @@ async function handleSetup(req, res) {
 
       const saved = saveConfig(config);
       restartGateway("allowFrom update");
+
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(renderSetupPage(saved, { saved: true }));
+      return;
+    }
+
+    if (req.url === "/setup/channel") {
+      const channelName = (params.get("channel") || "").trim();
+      if (!channelName) throw new Error("Missing channel.");
+
+      const config = readConfig();
+      config.channels = config.channels || {};
+      const channel = { ...(config.channels[channelName] || {}) };
+
+      channel.enabled = boolFromParams(params, "enabled");
+
+      const dmPolicy = (params.get("dmPolicy") || "").trim();
+      if (dmPolicy) channel.dmPolicy = dmPolicy;
+      else delete channel.dmPolicy;
+
+      const groupPolicy = (params.get("groupPolicy") || "").trim();
+      if (groupPolicy) channel.groupPolicy = groupPolicy;
+      else delete channel.groupPolicy;
+
+      const streaming = (params.get("streaming") || "").trim();
+      if (streaming) channel.streaming = streaming;
+      else delete channel.streaming;
+
+      const allowFromRaw = (params.get("allowFrom") || "").trim();
+      if (allowFromRaw) channel.allowFrom = splitCsvList(allowFromRaw);
+      else delete channel.allowFrom;
+
+      if (channelName === "telegram") {
+        const autoSelectFamily = boolFromParams(params, "autoSelectFamily");
+        const dnsResultOrder = (params.get("dnsResultOrder") || "").trim();
+
+        if (autoSelectFamily || dnsResultOrder) {
+          channel.network = channel.network || {};
+          channel.network.autoSelectFamily = autoSelectFamily;
+          if (dnsResultOrder) channel.network.dnsResultOrder = dnsResultOrder;
+          else delete channel.network.dnsResultOrder;
+        } else {
+          delete channel.network;
+        }
+      }
+
+      if (channelName === "slack") {
+        const mode = (params.get("mode") || "").trim();
+        if (mode) channel.mode = mode;
+        else delete channel.mode;
+
+        channel.nativeStreaming = boolFromParams(params, "nativeStreaming");
+        if (!channel.nativeStreaming) delete channel.nativeStreaming;
+      }
+
+      if (channelName === "whatsapp") {
+        const mediaMaxMb = (params.get("mediaMaxMb") || "").trim();
+        if (mediaMaxMb) channel.mediaMaxMb = Number(mediaMaxMb);
+        else delete channel.mediaMaxMb;
+      }
+
+      config.channels[channelName] = channel;
+
+      const saved = saveConfig(config);
+      restartGateway(`${channelName} channel update`);
 
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(renderSetupPage(saved, { saved: true }));
@@ -1129,7 +1426,7 @@ const server = http.createServer(async (req, res) => {
       JSON.stringify({
         ok: true,
         gateway: gatewayReady,
-        uptime: process.uptime(),
+        uptime: process.uptime()
       })
     );
     return;
@@ -1172,7 +1469,7 @@ const server = http.createServer(async (req, res) => {
   if (isPageLoad && isControlUiPath && OPENCLAW_GATEWAY_TOKEN) {
     const sep = url.includes("?") ? "&" : "?";
     res.writeHead(302, {
-      Location: `${url}${sep}token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`,
+      Location: `${url}${sep}token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}`
     });
     res.end();
     return;
@@ -1192,7 +1489,7 @@ const server = http.createServer(async (req, res) => {
       port: GATEWAY_PORT,
       path: proxyPath,
       method: req.method,
-      headers,
+      headers
     },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
@@ -1279,6 +1576,7 @@ process.on("SIGTERM", () => {
   pendingRestartReason = null;
   gatewayReady = false;
   gatewayStarting = false;
+  stopAutoApproveLoop();
 
   const child = gatewayProcess;
   gatewayProcess = null;
