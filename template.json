@@ -1,6 +1,6 @@
 {
   "name": "OpenClaw (Secure)",
-  "description": "Self-hosted personal AI assistant via WhatsApp, Telegram, Slack, Discord and more. Hardened deployment: loopback-only gateway, required token auth, DM pairing, sandbox for group sessions, non-root container. Setup wizard for easy provider & model selection.",
+  "description": "Self-hosted personal AI assistant via Telegram, Discord, Slack, WhatsApp and more. Secure Railway template with loopback-only gateway, token auth, setup wizard, persistent state volume, and safe default tool policy.",
   "tags": ["ai", "assistant", "telegram", "discord", "slack", "llm", "personal-ai"],
   "readmeUrl": "https://github.com/omryatia/openclaw-railway/blob/main/README.md",
   "demoUrl": "https://docs.openclaw.ai",
@@ -12,45 +12,50 @@
       },
       "variables": [
         {
-          "name": "GATEWAY_TOKEN",
-          "description": "Auth token for the gateway. Auto-generated — do not change unless you know what you're doing.",
+          "name": "OPENCLAW_GATEWAY_TOKEN",
+          "description": "Gateway auth token. Auto-generated.",
           "required": true,
           "defaultValue": "${{ secret(64) }}"
         },
         {
           "name": "SETUP_PASSWORD",
-          "description": "Password for the /setup wizard. Auto-generated — save this from your Railway Variables tab.",
+          "description": "Password for the /setup wizard. Auto-generated.",
           "required": true,
           "defaultValue": "${{ secret(24) }}"
         },
         {
-          "name": "ANTHROPIC_API_KEY",
-          "description": "Optional — you can also set this via the /setup wizard after deploy.",
+          "name": "OPENROUTER_API_KEY",
+          "description": "Optional. Enables OpenRouter models, including openrouter/auto.",
           "required": false
         },
         {
-          "name": "OPENROUTER_API_KEY",
-          "description": "Optional — you can also set this via the /setup wizard after deploy.",
+          "name": "ANTHROPIC_API_KEY",
+          "description": "Optional. Enables Anthropic models.",
+          "required": false
+        },
+        {
+          "name": "OPENAI_API_KEY",
+          "description": "Optional. Enables OpenAI models.",
           "required": false
         },
         {
           "name": "TELEGRAM_BOT_TOKEN",
-          "description": "Telegram bot token from @BotFather. Optional — enables Telegram channel.",
+          "description": "Optional. Telegram bot token from @BotFather.",
           "required": false
         },
         {
           "name": "DISCORD_BOT_TOKEN",
-          "description": "Discord bot token. Optional — enables Discord channel.",
+          "description": "Optional. Discord bot token.",
           "required": false
         },
         {
           "name": "SLACK_BOT_TOKEN",
-          "description": "Slack Bot User OAuth Token (xoxb-...). Optional — enables Slack channel.",
+          "description": "Optional. Slack Bot User OAuth Token (xoxb-...).",
           "required": false
         },
         {
           "name": "SLACK_APP_TOKEN",
-          "description": "Slack App-Level Token (xapp-...). Required with SLACK_BOT_TOKEN for Socket Mode.",
+          "description": "Optional. Slack App-Level Token (xapp-...). Required with SLACK_BOT_TOKEN for Socket Mode.",
           "required": false
         }
       ],
