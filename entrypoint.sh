@@ -1,17 +1,12 @@
 #!/bin/sh
-
-# Runs as root:
-# 1. Fix volume permissions (Railway mounts volumes as root)
-# 2. Clean stale Chrome SingletonLock files
-# 3. Drop to node user
-
 set -e
 
-# Fix volume ownership
 mkdir -p /data/.openclaw /data/workspace
 chown -R node:node /data
 
-# Clean stale Chrome locks — causes silent browser failures after unclean shutdown
+# Clean stale browser locks after unclean shutdowns
 find /data/.openclaw/browser -name SingletonLock -delete 2>/dev/null || true
+find /data/.openclaw/browser -name SingletonCookie -delete 2>/dev/null || true
+find /data/.openclaw/browser -name SingletonSocket -delete 2>/dev/null || true
 
 exec tini -- gosu node "$@"
