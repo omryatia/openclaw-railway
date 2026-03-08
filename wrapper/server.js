@@ -1,13 +1,3 @@
-/**
- * OpenClaw Railway Wrapper
- * - Password-protected /setup page
- * - Writes and normalizes openclaw.json under /data/.openclaw
- * - Starts exactly one managed OpenClaw gateway process
- * - Reverse proxies HTTP + WebSocket traffic to the internal gateway
- * - Keeps gateway bound to loopback with token auth
- * - Syncs channel tokens from Railway env vars into config
- */
-
 "use strict";
 
 const http = require("http");
@@ -34,10 +24,8 @@ const PUBLIC_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || "";
 const PRIVATE_DOMAIN = process.env.RAILWAY_PRIVATE_DOMAIN || "";
 const PUBLIC_URL = PUBLIC_DOMAIN ? `https://${PUBLIC_DOMAIN}` : "";
 
-// Support both names to make Railway setup easier.
 const OPENCLAW_GATEWAY_TOKEN =
   process.env.OPENCLAW_GATEWAY_TOKEN || process.env.GATEWAY_TOKEN || "";
-
 const SETUP_PASSWORD = process.env.SETUP_PASSWORD || "";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
@@ -54,26 +42,23 @@ const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN || "";
 // -----------------------------------------------------------------------------
 
 const configErrors = [];
+
 if (!OPENCLAW_GATEWAY_TOKEN || OPENCLAW_GATEWAY_TOKEN.length < 32) {
   configErrors.push(
-    "OPENCLAW_GATEWAY_TOKEN (or GATEWAY_TOKEN) is missing or too short (min 32 chars)."
+    "OPENCLAW_GATEWAY_TOKEN (or GATEWAY_TOKEN) is missing or too short (minimum 32 chars)."
   );
 }
-if (!SETUP_PASSWORD || SETUP_PASSWORD.length < 8) {
-  configErrors.push("SETUP_PASSWORD is missing or too short (min 8 chars).");
-}
 
-if (configErrors.length) {
-  console.warn("[wrapper] Configuration issues:");
-  for (const err of configErrors) console.warn("  -", err);
+if (!SETUP_PASSWORD || SETUP_PASSWORD.length < 8) {
+  configErrors.push("SETUP_PASSWORD is missing or too short (minimum 8 chars).");
 }
 
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
 
-function ensureDir(dir) {
-  fs.mkdirSync(dir, { recursive: true });
+function ensureDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true });
 }
 
 function fileExists(filePath) {
@@ -105,21 +90,107 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function isFirstRun() {
+  return !fileExists(CONFIG_PATH);
+}
+
 function buildAllowedOrigins() {
   const origins = [];
-  if (PUBLIC_URL) origins.push(PUBLIC_URL);
-  if (PRIVATE_DOMAIN) origins.push(`http://${PRIVATE_DOMAIN}:${PORT}`);
-  return origins.length ? origins : ["*"];
+
+  if (PUBLIC_URL) {
+    origins.push(PUBLIC_URL);
+  }
+
+  if (PRIVATE_DOMAIN) {
+    origins.push(`http://${PRIVATE_DOMAIN}:${PORT}`);
+  }
+
+  return origins.length > 0 ? origins : ["*"];
 }
 
 function defaultModelFromEnv() {
-  if (ANTHROPIC_API_KEY) return "anthropic/claude-sonnet-4-5-20250929";
   if (OPENROUTER_API_KEY) return "openrouter/auto";
+  if (ANTHROPIC_API_KEY) return "anthropic/claude-opus-4-6";
   if (OPENAI_API_KEY) return "openai/gpt-4o";
   return "";
 }
 
-function stripProxyHeaders(original) {
+function checkSetupAuth(req) {
+  const auth = req.headers.authorization || "";
+  if (!auth.startsWith("Basic ")) return false;
+
+  const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
+  const password = decoded.split(":").slice(1).join(":");
+
+  const a = Buffer.from(password);
+  const b = Buffer.from(SETUP_PASSWORD);
+
+  if (a.length !== b.length) return false;
+
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk;
+      if (body.length > 2 * 1024 * 1024) {
+        reject(new Error("Request body too large."));
+      }
+    });
+
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+}
+
+function getOriginalHost(req) {
+  const forwardedHost = req.headers["x-forwarded-host"];
+  if (typeof forwardedHost === "string" && forwardedHost.trim()) {
+    return forwardedHost.split(",")[0].trim();
+  }
+  if (req.headers.host) {
+    return req.headers.host;
+  }
+  if (PUBLIC_DOMAIN) {
+    return PUBLIC_DOMAIN;
+  }
+  return `${GATEWAY_HOST}:${PORT}`;
+}
+
+function getOriginalProto(req) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  if (typeof forwardedProto === "string" && forwardedProto.trim()) {
+    return forwardedProto.split(",")[0].trim();
+  }
+
+  const origin = req.headers.origin;
+  if (typeof origin === "string") {
+    try {
+      return new URL(origin).protocol.replace(":", "");
+    } catch {
+      // ignore
+    }
+  }
+
+  return PUBLIC_URL ? "https" : "http";
+}
+
+function getOriginalClientIp(req) {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "127.0.0.1";
+}
+
+function stripIncomingProxyHeaders(original) {
   const stripped = new Set([
     "x-forwarded-for",
     "x-forwarded-proto",
@@ -137,94 +208,40 @@ function stripProxyHeaders(original) {
   ]);
 
   const clean = {};
-  for (const [k, v] of Object.entries(original)) {
-    if (!stripped.has(k.toLowerCase())) {
-      clean[k] = v;
+  for (const [key, value] of Object.entries(original)) {
+    if (!stripped.has(key.toLowerCase())) {
+      clean[key] = value;
     }
   }
   return clean;
 }
 
-function isFirstRun() {
-  return !fileExists(CONFIG_PATH);
-}
+function buildProxyHeaders(req, extra = {}) {
+  const headers = stripIncomingProxyHeaders(req.headers);
+  const host = getOriginalHost(req);
+  const proto = getOriginalProto(req);
+  const ip = getOriginalClientIp(req);
 
-function checkSetupAuth(req) {
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Basic ")) return false;
+  headers.host = host;
+  headers["x-forwarded-host"] = host;
+  headers["x-forwarded-proto"] = proto;
+  headers["x-forwarded-port"] = proto === "https" ? "443" : "80";
+  headers["x-forwarded-for"] = ip;
+  headers["x-real-ip"] = ip;
+  headers["x-openclaw-token"] = OPENCLAW_GATEWAY_TOKEN;
 
-  const decoded = Buffer.from(auth.slice(6), "base64").toString("utf8");
-  const password = decoded.split(":").slice(1).join(":");
-
-  const a = Buffer.from(password);
-  const b = Buffer.from(SETUP_PASSWORD);
-
-  if (a.length !== b.length) return false;
-  try {
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
+  for (const [k, v] of Object.entries(extra)) {
+    headers[k] = v;
   }
-}
 
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.on("data", (chunk) => {
-      body += chunk;
-      if (body.length > 2 * 1024 * 1024) {
-        reject(new Error("Request body too large."));
-      }
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
+  return headers;
 }
 
 // -----------------------------------------------------------------------------
-// Config normalization
+// Config
 // -----------------------------------------------------------------------------
 
-function createBaseConfig() {
-  const model = defaultModelFromEnv();
-
-  const config = {
-    agents: {
-      defaults: {
-        workspace: WORKSPACE_DIR,
-        sandbox: { mode: "non-main" },
-      },
-    },
-    commands: {
-      native: "auto",
-      nativeSkills: "auto",
-      restart: true,
-      ownerDisplay: "raw",
-    },
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      auth: { token: OPENCLAW_GATEWAY_TOKEN },
-      trustedProxies: ["127.0.0.1", "::1"],
-      controlUi: {
-        allowedOrigins: buildAllowedOrigins(),
-        dangerouslyDisableDeviceAuth: true,
-      },
-    },
-    tools: {
-      allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
-      deny: ["exec"],
-      elevated: { enabled: false },
-    },
-    channels: {},
-  };
-
-  if (model) {
-    config.agents.defaults.model = { primary: model };
-  }
-
-  return syncChannelTokens(config);
-}
+let normalizingFromWatch = false;
 
 function syncChannelTokens(config) {
   config.channels = config.channels || {};
@@ -235,6 +252,9 @@ function syncChannelTokens(config) {
     config.channels.telegram.botToken = TELEGRAM_BOT_TOKEN;
     if (!config.channels.telegram.dmPolicy) {
       config.channels.telegram.dmPolicy = "pairing";
+    }
+    if (!config.channels.telegram.groupPolicy) {
+      config.channels.telegram.groupPolicy = "disabled";
     }
   }
 
@@ -260,10 +280,72 @@ function syncChannelTokens(config) {
   return config;
 }
 
+function createBaseConfig() {
+  const model = defaultModelFromEnv();
+
+  const config = {
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+      port: GATEWAY_PORT,
+      auth: {
+        mode: "token",
+        token: OPENCLAW_GATEWAY_TOKEN,
+      },
+      trustedProxies: ["127.0.0.1", "::1"],
+      controlUi: {
+        allowedOrigins: buildAllowedOrigins(),
+        dangerouslyDisableDeviceAuth: true,
+      },
+    },
+    agents: {
+      defaults: {
+        workspace: WORKSPACE_DIR,
+        sandbox: {
+          mode: "non-main",
+        },
+      },
+    },
+    commands: {
+      native: "auto",
+      nativeSkills: "auto",
+      restart: true,
+      ownerDisplay: "raw",
+    },
+    tools: {
+      allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
+      deny: ["exec"],
+      elevated: {
+        enabled: false,
+      },
+    },
+    channels: {
+      telegram: {
+        dmPolicy: "pairing",
+        groupPolicy: "disabled",
+      },
+      discord: {
+        dmPolicy: "pairing",
+      },
+      slack: {
+        dmPolicy: "pairing",
+      },
+      whatsapp: {},
+    },
+  };
+
+  if (model) {
+    config.agents.defaults.model = {
+      primary: model,
+    };
+  }
+
+  return syncChannelTokens(config);
+}
+
 function normalizeConfig(input) {
   const config = JSON.parse(JSON.stringify(input || {}));
 
-  // Migrate legacy agent -> agents.defaults.
   if (config.agent) {
     config.agents = config.agents || {};
     config.agents.defaults = config.agents.defaults || {};
@@ -272,6 +354,7 @@ function normalizeConfig(input) {
       config.agents.defaults.model = config.agents.defaults.model || {};
       config.agents.defaults.model.primary = config.agent.model;
     }
+
     if (config.agent.workspace) {
       config.agents.defaults.workspace = config.agent.workspace;
     }
@@ -298,35 +381,33 @@ function normalizeConfig(input) {
   }
 
   if (!config.agents.defaults.model?.primary) {
-    const model = defaultModelFromEnv();
-    if (model) {
-      config.agents.defaults.model = { primary: model };
+    const fallbackModel = defaultModelFromEnv();
+    if (fallbackModel) {
+      config.agents.defaults.model = { primary: fallbackModel };
     }
   }
 
   config.commands = config.commands || {};
   if (config.commands.native === undefined) config.commands.native = "auto";
-  if (config.commands.nativeSkills === undefined) {
-    config.commands.nativeSkills = "auto";
-  }
+  if (config.commands.nativeSkills === undefined) config.commands.nativeSkills = "auto";
   if (config.commands.restart === undefined) config.commands.restart = true;
-  if (config.commands.ownerDisplay === undefined) {
-    config.commands.ownerDisplay = "raw";
-  }
+  if (config.commands.ownerDisplay === undefined) config.commands.ownerDisplay = "raw";
 
-  if (config.auth) {
+  if (config.auth !== undefined) {
     delete config.auth;
   }
 
   config.gateway = config.gateway || {};
   config.gateway.mode = "local";
   config.gateway.bind = "loopback";
+  config.gateway.port = GATEWAY_PORT;
   config.gateway.auth = config.gateway.auth || {};
+  config.gateway.auth.mode = "token";
   config.gateway.auth.token = OPENCLAW_GATEWAY_TOKEN;
+
   if (config.gateway.auth.allowInsecureAuth !== undefined) {
     delete config.gateway.auth.allowInsecureAuth;
   }
-
   if (config.gateway.tailscale !== undefined) {
     delete config.gateway.tailscale;
   }
@@ -343,15 +424,16 @@ function normalizeConfig(input) {
     config.tools = {
       allow: ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
       deny: ["exec"],
-      elevated: { enabled: false },
+      elevated: {
+        enabled: false,
+      },
     };
   }
 
-  config.channels = config.channels || {};
   syncChannelTokens(config);
 
   for (const channelName of ["telegram", "discord", "slack"]) {
-    const channel = config.channels[channelName];
+    const channel = config.channels?.[channelName];
     if (
       channel &&
       channel.dmPolicy === "allowlist" &&
@@ -371,11 +453,12 @@ function ensureConfigFile() {
   if (!fileExists(CONFIG_PATH)) {
     writeJson(CONFIG_PATH, createBaseConfig());
     console.log("[config] Wrote initial config:", CONFIG_PATH);
-  } else {
-    const current = readJson(CONFIG_PATH, {});
-    writeJson(CONFIG_PATH, normalizeConfig(current));
-    console.log("[config] Normalized existing config:", CONFIG_PATH);
+    return;
   }
+
+  const current = readJson(CONFIG_PATH, {});
+  writeJson(CONFIG_PATH, normalizeConfig(current));
+  console.log("[config] Normalized existing config:", CONFIG_PATH);
 }
 
 function readConfig() {
@@ -434,27 +517,38 @@ function scheduleRestart() {
 
   const delay = RESTART_DELAYS[Math.min(restartCount - 1, RESTART_DELAYS.length - 1)];
   console.log(`[gateway] Restarting in ${delay}ms (${restartCount}/${MAX_RESTARTS})...`);
+
   setTimeout(() => {
-    if (!shutdownInProgress) startGateway();
+    if (!shutdownInProgress) {
+      startGateway();
+    }
   }, delay);
 }
 
 function ensureConfigWatcher() {
-  if (configWatcherStarted) return;
-  if (!fileExists(CONFIG_PATH)) return;
+  if (configWatcherStarted || !fileExists(CONFIG_PATH)) return;
 
   try {
     fs.watch(CONFIG_PATH, (event) => {
-      if (event === "change") {
-        setTimeout(() => {
-          try {
-            const current = readJson(CONFIG_PATH, {});
-            writeJson(CONFIG_PATH, normalizeConfig(current));
-          } catch (err) {
-            console.error("[config] fs.watch normalize failed:", err.message);
+      if (event !== "change" || normalizingFromWatch) return;
+
+      setTimeout(() => {
+        try {
+          const currentRaw = fs.readFileSync(CONFIG_PATH, "utf8");
+          const normalized = JSON.stringify(normalizeConfig(JSON.parse(currentRaw)), null, 2);
+
+          if (currentRaw !== normalized) {
+            normalizingFromWatch = true;
+            fs.writeFileSync(CONFIG_PATH, normalized, { mode: 0o600 });
           }
-        }, 200);
-      }
+        } catch (err) {
+          console.error("[config] fs.watch normalize failed:", err.message);
+        } finally {
+          setTimeout(() => {
+            normalizingFromWatch = false;
+          }, 300);
+        }
+      }, 200);
     });
 
     configWatcherStarted = true;
@@ -504,7 +598,6 @@ function pollGatewayReady(expectedChild, attempts = 0) {
         gatewayReady = true;
         gatewayStarting = false;
         restartCount = 0;
-
         console.log("[gateway] Ready ✓");
         ensureConfigWatcher();
         return;
@@ -613,6 +706,7 @@ function restartGateway(reason = "config change") {
   pendingRestartReason = reason;
 
   const child = gatewayProcess;
+
   try {
     child.kill("SIGTERM");
   } catch {}
@@ -664,12 +758,16 @@ function renderSetupPage(config, opts = {}) {
   const model = config.agents?.defaults?.model?.primary || "";
   const telegramAllowFrom = config.channels?.telegram?.allowFrom || [];
 
-  const providerStatus = [
-    ["ANTHROPIC_API_KEY", !!ANTHROPIC_API_KEY],
+  const envStatus = [
+    ["OPENCLAW_GATEWAY_TOKEN", !!OPENCLAW_GATEWAY_TOKEN],
+    ["SETUP_PASSWORD", !!SETUP_PASSWORD],
     ["OPENROUTER_API_KEY", !!OPENROUTER_API_KEY],
+    ["ANTHROPIC_API_KEY", !!ANTHROPIC_API_KEY],
     ["OPENAI_API_KEY", !!OPENAI_API_KEY],
     ["TELEGRAM_BOT_TOKEN", !!TELEGRAM_BOT_TOKEN],
-    ["OPENCLAW_GATEWAY_TOKEN", !!OPENCLAW_GATEWAY_TOKEN],
+    ["DISCORD_BOT_TOKEN", !!DISCORD_BOT_TOKEN],
+    ["SLACK_BOT_TOKEN", !!SLACK_BOT_TOKEN],
+    ["SLACK_APP_TOKEN", !!SLACK_APP_TOKEN],
   ];
 
   const configJson = escapeHtml(JSON.stringify(config, null, 2));
@@ -693,7 +791,7 @@ function renderSetupPage(config, opts = {}) {
     input,select,textarea,button{
       width:100%;padding:10px 12px;border-radius:8px;border:1px solid #333;background:#111;color:#fff
     }
-    textarea{min-height:280px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    textarea{min-height:320px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     button{cursor:pointer;background:#ff6b35;border:none;margin-top:10px}
     button:hover{filter:brightness(1.05)}
     code{background:#222;padding:2px 6px;border-radius:4px}
@@ -701,6 +799,7 @@ function renderSetupPage(config, opts = {}) {
     .pill{display:inline-block;padding:4px 8px;border-radius:999px;background:#222;margin-right:8px}
     .list{line-height:1.8}
     a{color:#ff9566}
+    @media (max-width: 700px){ .row{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
@@ -713,7 +812,13 @@ function renderSetupPage(config, opts = {}) {
       <p class="muted">Public URL: ${PUBLIC_URL ? `<a href="${escapeHtml(PUBLIC_URL)}" target="_blank">${escapeHtml(PUBLIC_URL)}</a>` : "not set"}</p>
       <p class="muted">Private domain: ${PRIVATE_DOMAIN ? escapeHtml(PRIVATE_DOMAIN) : "not set"}</p>
       <p class="muted">Config: <code>${escapeHtml(CONFIG_PATH)}</code></p>
-      ${PUBLIC_URL && gatewayReady ? `<p><a href="${escapeHtml(PUBLIC_URL)}/?token=${encodeURIComponent(OPENCLAW_GATEWAY_TOKEN)}" target="_blank">Open Control UI</a></p>` : ""}
+      ${
+        PUBLIC_URL && gatewayReady
+          ? `<p><a href="${escapeHtml(PUBLIC_URL)}/?token=${encodeURIComponent(
+              OPENCLAW_GATEWAY_TOKEN
+            )}" target="_blank">Open Control UI</a></p>`
+          : ""
+      }
       ${saved}
       ${error}
     </div>
@@ -721,7 +826,7 @@ function renderSetupPage(config, opts = {}) {
     <div class="card">
       <h2>Environment status</h2>
       <div class="list">
-        ${providerStatus
+        ${envStatus
           .map(([name, ok]) => `<div><span class="${ok ? "ok" : "bad"}">${ok ? "✓" : "✗"}</span> <code>${name}</code></div>`)
           .join("")}
       </div>
@@ -732,14 +837,14 @@ function renderSetupPage(config, opts = {}) {
       <form method="POST" action="/setup/model">
         <select name="model">
           <option value="">Select model</option>
-          <option value="anthropic/claude-opus-4-6" ${model === "anthropic/claude-opus-4-6" ? "selected" : ""}>anthropic/claude-opus-4-6</option>
-          <option value="anthropic/claude-sonnet-4-5-20250929" ${model === "anthropic/claude-sonnet-4-5-20250929" ? "selected" : ""}>anthropic/claude-sonnet-4-5-20250929</option>
-          <option value="anthropic/claude-haiku-4-5-20251001" ${model === "anthropic/claude-haiku-4-5-20251001" ? "selected" : ""}>anthropic/claude-haiku-4-5-20251001</option>
           <option value="openrouter/auto" ${model === "openrouter/auto" ? "selected" : ""}>openrouter/auto</option>
           <option value="openrouter/anthropic/claude-sonnet-4-5-20250929" ${model === "openrouter/anthropic/claude-sonnet-4-5-20250929" ? "selected" : ""}>openrouter/anthropic/claude-sonnet-4-5-20250929</option>
           <option value="openrouter/anthropic/claude-opus-4-6" ${model === "openrouter/anthropic/claude-opus-4-6" ? "selected" : ""}>openrouter/anthropic/claude-opus-4-6</option>
           <option value="openrouter/openai/gpt-4o" ${model === "openrouter/openai/gpt-4o" ? "selected" : ""}>openrouter/openai/gpt-4o</option>
           <option value="openrouter/google/gemini-2.5-pro" ${model === "openrouter/google/gemini-2.5-pro" ? "selected" : ""}>openrouter/google/gemini-2.5-pro</option>
+          <option value="anthropic/claude-opus-4-6" ${model === "anthropic/claude-opus-4-6" ? "selected" : ""}>anthropic/claude-opus-4-6</option>
+          <option value="anthropic/claude-sonnet-4-5-20250929" ${model === "anthropic/claude-sonnet-4-5-20250929" ? "selected" : ""}>anthropic/claude-sonnet-4-5-20250929</option>
+          <option value="anthropic/claude-haiku-4-5-20251001" ${model === "anthropic/claude-haiku-4-5-20251001" ? "selected" : ""}>anthropic/claude-haiku-4-5-20251001</option>
           <option value="openai/gpt-4o" ${model === "openai/gpt-4o" ? "selected" : ""}>openai/gpt-4o</option>
           <option value="openai/gpt-4.1" ${model === "openai/gpt-4.1" ? "selected" : ""}>openai/gpt-4.1</option>
           <option value="openai/o3" ${model === "openai/o3" ? "selected" : ""}>openai/o3</option>
@@ -809,7 +914,7 @@ async function handleSetup(req, res) {
   if (!checkSetupAuth(req)) {
     res.writeHead(401, {
       "WWW-Authenticate": 'Basic realm="OpenClaw Setup"',
-      "Content-Type": "text/plain",
+      "Content-Type": "text/plain; charset=utf-8",
     });
     res.end("Authentication required. Use any username and your SETUP_PASSWORD.");
     return;
@@ -858,6 +963,7 @@ async function handleSetup(req, res) {
       if (!config.channels[channel].allowFrom.includes(senderId)) {
         config.channels[channel].allowFrom.push(senderId);
       }
+
       if (config.channels[channel].dmPolicy === "pairing") {
         config.channels[channel].dmPolicy = "allowlist";
       }
@@ -921,7 +1027,7 @@ async function handleSetup(req, res) {
 }
 
 // -----------------------------------------------------------------------------
-// HTTP + WS proxy server
+// HTTP + WS proxy
 // -----------------------------------------------------------------------------
 
 const server = http.createServer(async (req, res) => {
@@ -988,9 +1094,7 @@ const server = http.createServer(async (req, res) => {
         OPENCLAW_GATEWAY_TOKEN
       )}`;
 
-  const cleanHeaders = stripProxyHeaders(req.headers);
-  cleanHeaders.host = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
-  cleanHeaders["x-openclaw-token"] = OPENCLAW_GATEWAY_TOKEN;
+  const headers = buildProxyHeaders(req);
 
   const proxyReq = http.request(
     {
@@ -998,7 +1102,7 @@ const server = http.createServer(async (req, res) => {
       port: GATEWAY_PORT,
       path: proxyPath,
       method: req.method,
-      headers: cleanHeaders,
+      headers,
     },
     (proxyRes) => {
       res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
@@ -1029,9 +1133,7 @@ server.on("upgrade", (req, socket, head) => {
     proxy.setKeepAlive(true, 20000);
     proxy.setNoDelay(true);
 
-    const headers = stripProxyHeaders(req.headers);
-    headers.host = `${GATEWAY_HOST}:${GATEWAY_PORT}`;
-
+    const headers = buildProxyHeaders(req);
     let wsUrl = req.url || "/";
     wsUrl += `${wsUrl.includes("?") ? "&" : "?"}token=${encodeURIComponent(
       OPENCLAW_GATEWAY_TOKEN
@@ -1060,7 +1162,6 @@ server.on("upgrade", (req, socket, head) => {
 function boot() {
   ensureDir(STATE_DIR);
   ensureDir(WORKSPACE_DIR);
-
   ensureConfigFile();
 
   server.timeout = 0;
@@ -1073,7 +1174,6 @@ function boot() {
     console.log(`[wrapper] State dir: ${STATE_DIR}`);
     console.log(`[wrapper] Workspace dir: ${WORKSPACE_DIR}`);
     console.log(`[wrapper] Config: ${CONFIG_PATH}`);
-    console.log(`[wrapper] First run: ${isFirstRun()}`);
 
     if (configErrors.length > 0) {
       console.warn("[wrapper] Serving config error page until variables are fixed.");
