@@ -1,6 +1,6 @@
 {
   "name": "OpenClaw (Secure)",
-  "description": "Self-hosted personal AI assistant via Telegram, Discord, Slack, WhatsApp and more. Secure Railway template with loopback-only gateway, token auth, setup wizard, persistent state volume, and safe default tool policy.",
+  "description": "Self-hosted personal AI assistant via Telegram, Discord, Slack, WhatsApp and more. Secure Railway template with loopback-only gateway, token auth, setup wizard, persistent state volume, safe default tool policy, and optional automatic browser device approval.",
   "tags": ["ai", "assistant", "telegram", "discord", "slack", "llm", "personal-ai"],
   "readmeUrl": "https://github.com/omryatia/openclaw-railway/blob/main/README.md",
   "demoUrl": "https://docs.openclaw.ai",
@@ -22,6 +22,12 @@
           "description": "Password for the /setup wizard. Auto-generated.",
           "required": true,
           "defaultValue": "${{ secret(24) }}"
+        },
+        {
+          "name": "AUTO_APPROVE_LATEST_DEVICE",
+          "description": "If true, the wrapper periodically approves the latest pending browser device. Convenient, but weaker security.",
+          "required": false,
+          "defaultValue": "true"
         },
         {
           "name": "OPENROUTER_API_KEY",
