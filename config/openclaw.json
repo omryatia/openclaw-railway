@@ -1,25 +1,27 @@
 {
   "gateway": {
+    "mode": "local",
     "bind": "loopback",
     "port": 18789,
     "auth": {
       "mode": "token"
     },
-    "controlUi": {
-      "allowedOrigins": ["*"]
-    },
-    "trustedProxies": ["127.0.0.1/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+    "trustedProxies": ["127.0.0.1", "::1"],
+    "controlUi": {}
   },
   "agents": {
     "defaults": {
-      "model": {
-        "primary": "anthropic/claude-opus-4-6"
-      },
       "workspace": "/data/workspace",
       "sandbox": {
         "mode": "non-main"
       }
     }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
   },
   "tools": {
     "allow": ["read", "write", "edit", "web_search", "web_fetch", "apply_patch"],
@@ -30,7 +32,8 @@
   },
   "channels": {
     "telegram": {
-      "dmPolicy": "pairing"
+      "dmPolicy": "pairing",
+      "groupPolicy": "disabled"
     },
     "discord": {
       "dmPolicy": "pairing"
